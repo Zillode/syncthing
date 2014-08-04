@@ -16,6 +16,8 @@ rm -f $GOPATH/src/github.com/calmh/syncthing
 ln -s $(pwd) $GOPATH/src/github.com/calmh/syncthing
 
 echo "Building it..."
-rm syncthing
+if [ -d syncthing ]; then
+	rm syncthing
+fi
 ./build.sh
 

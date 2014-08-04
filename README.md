@@ -42,6 +42,10 @@ The [syncthing
 documentation](http://discourse.syncthing.net/category/documentation) is
 on the discourse site.
 
+Build the PPA with the following instructions:
+- ./build.sh setup
+- dpkg-buildpackage -rfakeroot -uc -b
+
 License
 =======
 
