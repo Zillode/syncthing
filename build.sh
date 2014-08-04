@@ -24,7 +24,7 @@ build() {
 
 	go vet ./...
 
-	godep go build $* -ldflags "$ldflags" ./cmd/syncthing
+	godep go build -v -x $* ./cmd/syncthing #-gccgoflags "$ldflags"
 }
 
 assets() {
