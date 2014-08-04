@@ -1,6 +1,6 @@
-// Copyright (C) 2014 Jakob Borg and other contributors. All rights reserved.
-// Use of this source code is governed by an MIT-style license that can be
-// found in the LICENSE file.
+// Copyright (C) 2014 Jakob Borg and Contributors (see the CONTRIBUTORS file).
+// All rights reserved. Use of this source code is governed by an MIT-style
+// license that can be found in the LICENSE file.
 
 // Package config implements reading and writing of the syncthing configuration file.
 package config
@@ -11,20 +11,18 @@ import (
 	"io"
 	"os"
 	"reflect"
-	"regexp"
 	"sort"
 	"strconv"
-	"strings"
 
 	"code.google.com/p/go.crypto/bcrypt"
-	"github.com/calmh/syncthing/logger"
-	"github.com/calmh/syncthing/scanner"
+	"github.com/syncthing/syncthing/logger"
+	"github.com/syncthing/syncthing/protocol"
 )
 
 var l = logger.DefaultLogger
 
 type Configuration struct {
-	Version      int                       `xml:"version,attr" default:"2"`
+	Version      int                       `xml:"version,attr" default:"3"`
 	Repositories []RepositoryConfiguration `xml:"repository"`
 	Nodes        []NodeConfiguration       `xml:"node"`
 	GUI          GUIConfiguration          `xml:"gui"`
@@ -32,44 +30,16 @@ type Configuration struct {
 	XMLName      xml.Name                  `xml:"configuration" json:"-"`
 }
 
-// SyncOrderPattern allows a user to prioritize file downloading based on a
-// regular expression.  If a file matches the Pattern the Priority will be
-// assigned to the file.  If a file matches more than one Pattern the
-// Priorities are summed.  This allows a user to, for example, prioritize files
-// in a directory, as well as prioritize based on file type.  The higher the
-// priority the "sooner" a file will be downloaded.  Files can be deprioritized
-// by giving them a negative priority.  While Priority is represented as an
-// integer, the expected range is something like -1000 to 1000.
-type SyncOrderPattern struct {
-	Pattern         string `xml:"pattern,attr"`
-	Priority        int    `xml:"priority,attr"`
-	compiledPattern *regexp.Regexp
-}
-
-func (s *SyncOrderPattern) CompiledPattern() *regexp.Regexp {
-	if s.compiledPattern == nil {
-		re, err := regexp.Compile(s.Pattern)
-		if err != nil {
-			l.Warnln("Could not compile regexp (" + s.Pattern + "): " + err.Error())
-			s.compiledPattern = regexp.MustCompile("^\\0$")
-		} else {
-			s.compiledPattern = re
-		}
-	}
-	return s.compiledPattern
-}
-
 type RepositoryConfiguration struct {
-	ID                string                  `xml:"id,attr"`
-	Directory         string                  `xml:"directory,attr"`
-	Nodes             []NodeConfiguration     `xml:"node"`
-	ReadOnly          bool                    `xml:"ro,attr"`
-	IgnorePerms       bool                    `xml:"ignorePerms,attr"`
-	Invalid           string                  `xml:"-"` // Set at runtime when there is an error, not saved
-	Versioning        VersioningConfiguration `xml:"versioning"`
-	SyncOrderPatterns []SyncOrderPattern      `xml:"syncorder>pattern"`
+	ID          string                  `xml:"id,attr"`
+	Directory   string                  `xml:"directory,attr"`
+	Nodes       []NodeConfiguration     `xml:"node"`
+	ReadOnly    bool                    `xml:"ro,attr"`
+	IgnorePerms bool                    `xml:"ignorePerms,attr"`
+	Invalid     string                  `xml:"-"` // Set at runtime when there is an error, not saved
+	Versioning  VersioningConfiguration `xml:"versioning"`
 
-	nodeIDs []string
+	nodeIDs []protocol.NodeID
 }
 
 type VersioningConfiguration struct {
@@ -113,7 +83,7 @@ func (c *VersioningConfiguration) UnmarshalXML(d *xml.Decoder, start xml.StartEl
 	return nil
 }
 
-func (r *RepositoryConfiguration) NodeIDs() []string {
+func (r *RepositoryConfiguration) NodeIDs() []protocol.NodeID {
 	if r.nodeIDs == nil {
 		for _, n := range r.Nodes {
 			r.nodeIDs = append(r.nodeIDs, n.NodeID)
@@ -122,30 +92,17 @@ func (r *RepositoryConfiguration) NodeIDs() []string {
 	return r.nodeIDs
 }
 
-func (r RepositoryConfiguration) FileRanker() func(scanner.File) int {
-	if len(r.SyncOrderPatterns) <= 0 {
-		return nil
-	}
-	return func(f scanner.File) int {
-		ret := 0
-		for _, v := range r.SyncOrderPatterns {
-			if v.CompiledPattern().MatchString(f.Name) {
-				ret += v.Priority
-			}
-		}
-		return ret
-	}
-}
-
 type NodeConfiguration struct {
-	NodeID    string   `xml:"id,attr"`
-	Name      string   `xml:"name,attr,omitempty"`
-	Addresses []string `xml:"address,omitempty"`
+	NodeID      protocol.NodeID `xml:"id,attr"`
+	Name        string          `xml:"name,attr,omitempty"`
+	Addresses   []string        `xml:"address,omitempty"`
+	Compression bool            `xml:"compression,attr"`
+	CertName    string          `xml:"certName,attr,omitempty"`
 }
 
 type OptionsConfiguration struct {
 	ListenAddress      []string `xml:"listenAddress" default:"0.0.0.0:22000"`
-	GlobalAnnServer    string   `xml:"globalAnnounceServer" default:"announce.syncthing.net:22025"`
+	GlobalAnnServer    string   `xml:"globalAnnounceServer" default:"announce.syncthing.net:22026"`
 	GlobalAnnEnabled   bool     `xml:"globalAnnounceEnabled" default:"true"`
 	LocalAnnEnabled    bool     `xml:"localAnnounceEnabled" default:"true"`
 	LocalAnnPort       int      `xml:"localAnnouncePort" default:"21025"`
@@ -174,8 +131,8 @@ type GUIConfiguration struct {
 	APIKey   string `xml:"apikey,omitempty"`
 }
 
-func (cfg *Configuration) NodeMap() map[string]NodeConfiguration {
-	m := make(map[string]NodeConfiguration, len(cfg.Nodes))
+func (cfg *Configuration) NodeMap() map[protocol.NodeID]NodeConfiguration {
+	m := make(map[protocol.NodeID]NodeConfiguration, len(cfg.Nodes))
 	for _, n := range cfg.Nodes {
 		m[n.NodeID] = n
 	}
@@ -276,7 +233,7 @@ func uniqueStrings(ss []string) []string {
 	return us
 }
 
-func Load(rd io.Reader, myID string) (Configuration, error) {
+func Load(rd io.Reader, myID protocol.NodeID) (Configuration, error) {
 	var cfg Configuration
 
 	setDefaults(&cfg)
@@ -297,15 +254,6 @@ func Load(rd io.Reader, myID string) (Configuration, error) {
 		cfg.Repositories = []RepositoryConfiguration{}
 	}
 
-	// Sanitize node IDs
-	for i := range cfg.Nodes {
-		node := &cfg.Nodes[i]
-		// Strip spaces and dashes
-		node.NodeID = strings.Replace(node.NodeID, "-", "", -1)
-		node.NodeID = strings.Replace(node.NodeID, " ", "", -1)
-		node.NodeID = strings.ToUpper(node.NodeID)
-	}
-
 	// Check for missing, bad or duplicate repository ID:s
 	var seenRepos = map[string]*RepositoryConfiguration{}
 	var uniqueCounter int
@@ -319,13 +267,6 @@ func Load(rd io.Reader, myID string) (Configuration, error) {
 
 		if repo.ID == "" {
 			repo.ID = "default"
-		}
-
-		for i := range repo.Nodes {
-			node := &repo.Nodes[i]
-			// Strip spaces and dashes
-			node.NodeID = strings.Replace(node.NodeID, "-", "", -1)
-			node.NodeID = strings.Replace(node.NodeID, " ", "", -1)
 		}
 
 		if seen, ok := seenRepos[repo.ID]; ok {
@@ -355,6 +296,11 @@ func Load(rd io.Reader, myID string) (Configuration, error) {
 		convertV1V2(&cfg)
 	}
 
+	// Upgrade to v3 configuration if appropriate
+	if cfg.Version == 2 {
+		convertV2V3(&cfg)
+	}
+
 	// Hash old cleartext passwords
 	if len(cfg.GUI.Password) > 0 && cfg.GUI.Password[0] != '$' {
 		hash, err := bcrypt.GenerateFromPassword([]byte(cfg.GUI.Password), 0)
@@ -365,10 +311,23 @@ func Load(rd io.Reader, myID string) (Configuration, error) {
 		}
 	}
 
+	// Build a list of available nodes
+	existingNodes := make(map[protocol.NodeID]bool)
+	existingNodes[myID] = true
+	for _, node := range cfg.Nodes {
+		existingNodes[node.NodeID] = true
+	}
+
 	// Ensure this node is present in all relevant places
+	// Ensure that any loose nodes are not present in the wrong places
+	// Ensure that there are no duplicate nodes
 	cfg.Nodes = ensureNodePresent(cfg.Nodes, myID)
+	sort.Sort(NodeConfigurationList(cfg.Nodes))
 	for i := range cfg.Repositories {
 		cfg.Repositories[i].Nodes = ensureNodePresent(cfg.Repositories[i].Nodes, myID)
+		cfg.Repositories[i].Nodes = ensureExistingNodes(cfg.Repositories[i].Nodes, existingNodes)
+		cfg.Repositories[i].Nodes = ensureNoDuplicates(cfg.Repositories[i].Nodes)
+		sort.Sort(NodeConfigurationList(cfg.Repositories[i].Nodes))
 	}
 
 	// An empty address list is equivalent to a single "dynamic" entry
@@ -382,6 +341,23 @@ func Load(rd io.Reader, myID string) (Configuration, error) {
 	return cfg, err
 }
 
+func convertV2V3(cfg *Configuration) {
+	// In previous versions, compression was always on. When upgrading, enable
+	// compression on all existing new. New nodes will get compression on by
+	// default by the GUI.
+	for i := range cfg.Nodes {
+		cfg.Nodes[i].Compression = true
+	}
+
+	// The global discovery format and port number changed in v0.9. Having the
+	// default announce server but old port number is guaranteed to be legacy.
+	if cfg.Options.GlobalAnnServer == "announce.syncthing.net:22025" {
+		cfg.Options.GlobalAnnServer = "announce.syncthing.net:22026"
+	}
+
+	cfg.Version = 3
+}
+
 func convertV1V2(cfg *Configuration) {
 	// Collect the list of nodes.
 	// Replace node configs inside repositories with only a reference to the nide ID.
@@ -390,8 +366,9 @@ func convertV1V2(cfg *Configuration) {
 	for i, repo := range cfg.Repositories {
 		cfg.Repositories[i].ReadOnly = cfg.Options.Deprecated_ReadOnly
 		for j, node := range repo.Nodes {
-			if _, ok := nodes[node.NodeID]; !ok {
-				nodes[node.NodeID] = node
+			id := node.NodeID.String()
+			if _, ok := nodes[id]; !ok {
+				nodes[id] = node
 			}
 			cfg.Repositories[i].Nodes[j] = NodeConfiguration{NodeID: node.NodeID}
 		}
@@ -416,7 +393,7 @@ func convertV1V2(cfg *Configuration) {
 type NodeConfigurationList []NodeConfiguration
 
 func (l NodeConfigurationList) Less(a, b int) bool {
-	return l[a].NodeID < l[b].NodeID
+	return l[a].NodeID.Compare(l[b].NodeID) == -1
 }
 func (l NodeConfigurationList) Swap(a, b int) {
 	l[a], l[b] = l[b], l[a]
@@ -425,24 +402,51 @@ func (l NodeConfigurationList) Len() int {
 	return len(l)
 }
 
-func ensureNodePresent(nodes []NodeConfiguration, myID string) []NodeConfiguration {
-	var myIDExists bool
+func ensureNodePresent(nodes []NodeConfiguration, myID protocol.NodeID) []NodeConfiguration {
 	for _, node := range nodes {
-		if node.NodeID == myID {
-			myIDExists = true
-			break
+		if node.NodeID.Equals(myID) {
+			return nodes
 		}
 	}
 
-	if !myIDExists {
-		name, _ := os.Hostname()
-		nodes = append(nodes, NodeConfiguration{
-			NodeID: myID,
-			Name:   name,
-		})
-	}
-
-	sort.Sort(NodeConfigurationList(nodes))
+	name, _ := os.Hostname()
+	nodes = append(nodes, NodeConfiguration{
+		NodeID: myID,
+		Name:   name,
+	})
 
 	return nodes
+}
+
+func ensureExistingNodes(nodes []NodeConfiguration, existingNodes map[protocol.NodeID]bool) []NodeConfiguration {
+	count := len(nodes)
+	i := 0
+loop:
+	for i < count {
+		if _, ok := existingNodes[nodes[i].NodeID]; !ok {
+			nodes[i] = nodes[count-1]
+			count--
+			continue loop
+		}
+		i++
+	}
+	return nodes[0:count]
+}
+
+func ensureNoDuplicates(nodes []NodeConfiguration) []NodeConfiguration {
+	count := len(nodes)
+	i := 0
+	seenNodes := make(map[protocol.NodeID]bool)
+loop:
+	for i < count {
+		id := nodes[i].NodeID
+		if _, ok := seenNodes[id]; ok {
+			nodes[i] = nodes[count-1]
+			count--
+			continue loop
+		}
+		seenNodes[id] = true
+		i++
+	}
+	return nodes[0:count]
 }

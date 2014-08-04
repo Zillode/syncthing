@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/calmh/syncthing/model"
+	"github.com/syncthing/syncthing/model"
 )
 
 // Current version number of the usage report, for acceptance purposes. If
@@ -23,7 +23,7 @@ var stopUsageReportingCh = make(chan struct{})
 
 func reportData(m *model.Model) map[string]interface{} {
 	res := make(map[string]interface{})
-	res["uniqueID"] = strings.ToLower(certID([]byte(myID)))[:6]
+	res["uniqueID"] = strings.ToLower(myID.String()[:6])
 	res["version"] = Version
 	res["longVersion"] = LongVersion
 	res["platform"] = runtime.GOOS + "-" + runtime.GOARCH

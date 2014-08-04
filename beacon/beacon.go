@@ -1,6 +1,6 @@
-// Copyright (C) 2014 Jakob Borg and other contributors. All rights reserved.
-// Use of this source code is governed by an MIT-style license that can be
-// found in the LICENSE file.
+// Copyright (C) 2014 Jakob Borg and Contributors (see the CONTRIBUTORS file).
+// All rights reserved. Use of this source code is governed by an MIT-style
+// license that can be found in the LICENSE file.
 
 package beacon
 
@@ -124,7 +124,7 @@ func bcast(ip *net.IPNet) *net.IPNet {
 
 	offset := len(bc.IP) - len(bc.Mask)
 	for i := range bc.IP {
-		if i-offset > 0 {
+		if i-offset >= 0 {
 			bc.IP[i] = ip.IP[i] | ^ip.Mask[i-offset]
 		}
 	}

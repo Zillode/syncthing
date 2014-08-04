@@ -1,6 +1,6 @@
-// Copyright (C) 2014 Jakob Borg and other contributors. All rights reserved.
-// Use of this source code is governed by an MIT-style license that can be
-// found in the LICENSE file.
+// Copyright (C) 2014 Jakob Borg and Contributors (see the CONTRIBUTORS file).
+// All rights reserved. Use of this source code is governed by an MIT-style
+// license that can be found in the LICENSE file.
 
 package scanner
 
@@ -13,11 +13,10 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"time"
 	"code.google.com/p/go.text/unicode/norm"
 
-	"github.com/calmh/syncthing/lamport"
-	"github.com/calmh/syncthing/protocol"
+	"github.com/syncthing/syncthing/lamport"
+	"github.com/syncthing/syncthing/protocol"
 )
 
 type Walker struct {
@@ -55,37 +54,34 @@ type Suppressor interface {
 
 type CurrentFiler interface {
 	// CurrentFile returns the file as seen at last scan.
-	CurrentFile(name string) File
+	CurrentFile(name string) protocol.FileInfo
 }
 
 // Walk returns the list of files found in the local repository by scanning the
 // file system. Files are blockwise hashed.
-func (w *Walker) Walk() (files []File, ignore map[string][]string, err error) {
+func (w *Walker) Walk() (chan protocol.FileInfo, map[string][]string, error) {
 	if debug {
 		l.Debugln("Walk", w.Dir, w.BlockSize, w.IgnoreFile)
 	}
 
-	err = checkDir(w.Dir)
+	err := checkDir(w.Dir)
 	if err != nil {
-		return
+		return nil, nil, err
 	}
 
-	t0 := time.Now()
+	ignore := make(map[string][]string)
+	files := make(chan protocol.FileInfo)
+	hashedFiles := make(chan protocol.FileInfo)
+	newParallelHasher(w.Dir, w.BlockSize, runtime.NumCPU(), hashedFiles, files)
+	hashFiles := w.walkAndHashFiles(files, ignore)
 
-	ignore = make(map[string][]string)
-	hashFiles := w.walkAndHashFiles(&files, ignore)
+	go func() {
+		filepath.Walk(w.Dir, w.loadIgnoreFiles(w.Dir, ignore))
+		filepath.Walk(w.Dir, hashFiles)
+		close(files)
+	}()
 
-	filepath.Walk(w.Dir, w.loadIgnoreFiles(w.Dir, ignore))
-	filepath.Walk(w.Dir, hashFiles)
-
-	if debug {
-		t1 := time.Now()
-		d := t1.Sub(t0).Seconds()
-		l.Debugf("Walk in %.02f ms, %.0f files/s", d*1000, float64(len(files))/d)
-	}
-
-	err = checkDir(w.Dir)
-	return
+	return hashedFiles, ignore, nil
 }
 
 // CleanTempFiles removes all files that match the temporary filename pattern.
@@ -122,7 +118,7 @@ func (w *Walker) loadIgnoreFiles(dir string, ign map[string][]string) filepath.W
 	}
 }
 
-func (w *Walker) walkAndHashFiles(res *[]File, ign map[string][]string) filepath.WalkFunc {
+func (w *Walker) walkAndHashFiles(fchan chan protocol.FileInfo, ign map[string][]string) filepath.WalkFunc {
 	return func(p string, info os.FileInfo, err error) error {
 		if err != nil {
 			if debug {
@@ -171,31 +167,28 @@ func (w *Walker) walkAndHashFiles(res *[]File, ign map[string][]string) filepath
 			if w.CurrentFiler != nil {
 				cf := w.CurrentFiler.CurrentFile(rn)
 				permUnchanged := w.IgnorePerms || !protocol.HasPermissionBits(cf.Flags) || PermsEqual(cf.Flags, uint32(info.Mode()))
-				if cf.Modified == info.ModTime().Unix() && protocol.IsDirectory(cf.Flags) && permUnchanged {
-					if debug {
-						l.Debugln("unchanged:", cf)
-					}
-					*res = append(*res, cf)
-				} else {
-					var flags uint32 = protocol.FlagDirectory
-					if w.IgnorePerms {
-						flags |= protocol.FlagNoPermBits | 0777
-					} else {
-						flags |= uint32(info.Mode() & os.ModePerm)
-					}
-					f := File{
-						Name:     rn,
-						Version:  lamport.Default.Tick(0),
-						Flags:    flags,
-						Modified: info.ModTime().Unix(),
-					}
-					if debug {
-						l.Debugln("dir:", cf, f)
-					}
-					*res = append(*res, f)
+				if !protocol.IsDeleted(cf.Flags) && protocol.IsDirectory(cf.Flags) && permUnchanged {
+					return nil
 				}
-				return nil
 			}
+
+			var flags uint32 = protocol.FlagDirectory
+			if w.IgnorePerms {
+				flags |= protocol.FlagNoPermBits | 0777
+			} else {
+				flags |= uint32(info.Mode() & os.ModePerm)
+			}
+			f := protocol.FileInfo{
+				Name:     rn,
+				Version:  lamport.Default.Tick(0),
+				Flags:    flags,
+				Modified: info.ModTime().Unix(),
+			}
+			if debug {
+				l.Debugln("dir:", f)
+			}
+			fchan <- f
+			return nil
 		}
 
 		if info.Mode().IsRegular() {
@@ -203,22 +196,19 @@ func (w *Walker) walkAndHashFiles(res *[]File, ign map[string][]string) filepath
 				cf := w.CurrentFiler.CurrentFile(rn)
 				permUnchanged := w.IgnorePerms || !protocol.HasPermissionBits(cf.Flags) || PermsEqual(cf.Flags, uint32(info.Mode()))
 				if !protocol.IsDeleted(cf.Flags) && cf.Modified == info.ModTime().Unix() && permUnchanged {
-					if debug {
-						l.Debugln("unchanged:", cf)
-					}
-					*res = append(*res, cf)
 					return nil
 				}
 
 				if w.Suppressor != nil {
 					if cur, prev := w.Suppressor.Suppress(rn, info); cur && !prev {
 						l.Infof("Changes to %q are being temporarily suppressed because it changes too frequently.", p)
-						cf.Suppressed = true
-						cf.Version++
+						cf.Flags |= protocol.FlagInvalid
+						cf.Version = lamport.Default.Tick(cf.Version)
+						cf.LocalVersion = 0
 						if debug {
 							l.Debugln("suppressed:", cf)
 						}
-						*res = append(*res, cf)
+						fchan <- cf
 						return nil
 					} else if prev && !cur {
 						l.Infof("Changes to %q are no longer suppressed.", p)
@@ -230,41 +220,17 @@ func (w *Walker) walkAndHashFiles(res *[]File, ign map[string][]string) filepath
 				}
 			}
 
-			fd, err := os.Open(p)
-			if err != nil {
-				if debug {
-					l.Debugln("open:", p, err)
-				}
-				return nil
-			}
-			defer fd.Close()
-
-			t0 := time.Now()
-			blocks, err := Blocks(fd, w.BlockSize)
-			if err != nil {
-				if debug {
-					l.Debugln("hash error:", rn, err)
-				}
-				return nil
-			}
-			if debug {
-				t1 := time.Now()
-				l.Debugln("hashed:", rn, ";", len(blocks), "blocks;", info.Size(), "bytes;", int(float64(info.Size())/1024/t1.Sub(t0).Seconds()), "KB/s")
-			}
-
 			var flags = uint32(info.Mode() & os.ModePerm)
 			if w.IgnorePerms {
 				flags = protocol.FlagNoPermBits | 0666
 			}
-			f := File{
+
+			fchan <- protocol.FileInfo{
 				Name:     rn,
 				Version:  lamport.Default.Tick(0),
-				Size:     info.Size(),
 				Flags:    flags,
 				Modified: info.ModTime().Unix(),
-				Blocks:   blocks,
 			}
-			*res = append(*res, f)
 		}
 
 		return nil

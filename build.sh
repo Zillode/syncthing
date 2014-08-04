@@ -21,15 +21,13 @@ check() {
 
 build() {
 	check
-
 	go vet ./...
-
 	godep go build -v -x $* ./cmd/syncthing #-gccgoflags "$ldflags"
 }
 
 assets() {
 	check
-	godep go run cmd/assets/assets.go gui > auto/gui.files.go
+	godep go run cmd/genassets/main.go gui > auto/gui.files.go
 }
 
 test-cov() {
@@ -40,7 +38,7 @@ test-cov() {
 		godep go test -coverprofile=profile.out $dir || fail=1
 		if [ -f profile.out ] ; then
 			grep -v "mode: set" profile.out >> coverage.out
-		rm profile.out
+			rm profile.out
         fi
     done
 
@@ -49,7 +47,8 @@ test-cov() {
 
 test() {
 	check
-	godep go test -cpu=1,2,4 ./...
+	go vet ./...
+	godep go test -cpu=1,2,4 $* ./...
 }
 
 sign() {
@@ -77,8 +76,7 @@ zipDist() {
 	rm -rf "$name"
 	mkdir -p "$name"
 	for f in "${distFiles[@]}" ; do
-		sed 's/$/
-/' < "$f" > "$name/$f.txt"
+		GOARCH="" GOOS="" go run cmd/todos/main.go < "$f" > "$name/$f.txt"
 	done
 	cp syncthing.exe "$name"
 	sign "$name/syncthing.exe"
@@ -88,20 +86,42 @@ zipDist() {
 
 deps() {
 	check
-	godep save ./cmd/syncthing ./cmd/assets ./discover/cmd/discosrv
+	godep save ./cmd/...
 }
 
 setup() {
-	echo Installing godep...
-	go get -u github.com/tools/godep
-	echo Installing go vet...
-	go get -u code.google.com/p/go.tools/cmd/vet
+	go get -v code.google.com/p/go.tools/cmd/cover
+	go get -v code.google.com/p/go.tools/cmd/vet
+	go get -v github.com/mattn/goveralls
+	go get -v github.com/tools/godep
+	GOPATH="$GOPATH:$(godep path)" go get -v -t ./...
+}
+
+xdr() {
+	for f in discover/packets files/leveldb protocol/message ; do
+		go run "$(godep path)/src/github.com/calmh/xdr/cmd/genxdr/main.go" -- "${f}.go" > "${f}_xdr.go"
+	done
+}
+
+translate() {
+	pushd gui
+	go run ../cmd/translate/main.go lang-en.json < index.html > lang-en-new.json
+	mv lang-en-new.json lang-en.json
+	popd
+}
+
+transifex() {
+	pushd gui
+	go run ../cmd/transifexdl/main.go > valid-langs.js
+	popd
+	assets
 }
 
 case "$1" in
 	"")
 		shift
-		build $*
+		export GOBIN=$(pwd)/bin
+		godep go install $* -ldflags "$ldflags" ./cmd/...
 		;;
 
 	race)
@@ -114,7 +134,7 @@ case "$1" in
 		;;
 
 	test)
-		test
+		test -short
 		;;
 
 	test-cov)
@@ -123,24 +143,20 @@ case "$1" in
 
 	tar)
 		rm -f *.tar.gz *.zip
-		test || exit 1
+		test -short || exit 1
 		assets
 		build
 
 		eval $(go env)
-		name="syncthing-$GOOS-$GOARCH-$version"
+		name="syncthing-${GOOS/darwin/macosx}-$GOARCH-$version"
 
 		tarDist "$name"
 		;;
 
 	all)
 		rm -f *.tar.gz *.zip
-		test || exit 1
+		test -short || exit 1
 		assets
-
-		godep go build ./discover/cmd/discosrv
-		godep go build ./cmd/stpidx
-		godep go build ./cmd/stcli
 
 		for os in darwin-amd64 linux-386 linux-amd64 freebsd-amd64 windows-amd64 windows-386 solaris-amd64 ; do
 			export GOOS=${os%-*}
@@ -148,7 +164,7 @@ case "$1" in
 
 			build
 
-			name="syncthing-$os-$version"
+			name="syncthing-${os/darwin/macosx}-$version"
 			case $GOOS in
 				windows)
 					zipDist "$name"
@@ -187,7 +203,7 @@ case "$1" in
 		tag=$(git describe)
 		shopt -s nullglob
 		for f in *.tar.gz *.zip *.asc ; do
-			relup calmh/syncthing "$tag" "$f"
+			relup syncthing/syncthing "$tag" "$f"
 		done
 		;;
 
@@ -201,6 +217,18 @@ case "$1" in
 
 	setup)
 		setup
+		;;
+
+	xdr)
+		xdr
+		;;
+
+	translate)
+		translate
+		;;
+
+	transifex)
+		transifex
 		;;
 
 	*)

@@ -1,37 +1,107 @@
-// Copyright (C) 2014 Jakob Borg and other contributors. All rights reserved.
-// Use of this source code is governed by an MIT-style license that can be
-// found in the LICENSE file.
+// Copyright (C) 2014 Jakob Borg and Contributors (see the CONTRIBUTORS file).
+// All rights reserved. Use of this source code is governed by an MIT-style
+// license that can be found in the LICENSE file.
 
 /*jslint browser: true, continue: true, plusplus: true */
 /*global $: false, angular: false */
 
 'use strict';
 
-var syncthing = angular.module('syncthing', []);
+var syncthing = angular.module('syncthing', ['pascalprecht.translate']);
 var urlbase = 'rest';
 
-syncthing.config(function ($httpProvider) {
+syncthing.config(function ($httpProvider, $translateProvider) {
     $httpProvider.defaults.xsrfHeaderName = 'X-CSRF-Token';
     $httpProvider.defaults.xsrfCookieName = 'CSRF-Token';
+
+    $translateProvider.useStaticFilesLoader({
+        prefix: 'lang-',
+        suffix: '.json'
+    });
 });
 
-syncthing.controller('SyncthingCtrl', function ($scope, $http) {
+syncthing.controller('EventCtrl', function ($scope, $http) {
+    $scope.lastEvent = null;
+    var online = false;
+    var lastID = 0;
+
+    var successFn = function (data) {
+        if (!online) {
+            $scope.$emit('UIOnline');
+            online = true;
+        }
+
+        if (lastID > 0) {
+            data.forEach(function (event) {
+                console.log("event", event.id, event.type, event.data);
+                $scope.$emit(event.type, event);
+            });
+        };
+
+        $scope.lastEvent = data[data.length - 1];
+        lastID = $scope.lastEvent.id;
+
+        setTimeout(function () {
+            $http.get(urlbase + '/events?since=' + lastID)
+            .success(successFn)
+            .error(errorFn);
+        }, 500);
+    };
+
+    var errorFn = function (data) {
+        if (online) {
+            $scope.$emit('UIOffline');
+            online = false;
+        }
+        setTimeout(function () {
+            $http.get(urlbase + '/events?limit=1')
+            .success(successFn)
+            .error(errorFn);
+        }, 1000);
+    };
+
+    $http.get(urlbase + '/events?limit=1')
+        .success(successFn)
+        .error(errorFn);
+});
+
+syncthing.controller('SyncthingCtrl', function ($scope, $http, $translate, $location) {
     var prevDate = 0;
     var getOK = true;
     var restarting = false;
 
-    $scope.connections = {};
+    $scope.completion = {};
     $scope.config = {};
+    $scope.configInSync = true;
+    $scope.connections = {};
+    $scope.errors = [];
+    $scope.model = {};
     $scope.myID = '';
     $scope.nodes = [];
-    $scope.configInSync = true;
     $scope.protocolChanged = false;
-    $scope.errors = [];
-    $scope.seenError = '';
-    $scope.model = {};
-    $scope.repos = {};
     $scope.reportData = {};
     $scope.reportPreview = false;
+    $scope.repos = {};
+    $scope.seenError = '';
+    $scope.upgradeInfo = {};
+
+    $http.get(urlbase+"/lang").success(function (langs) {
+        var lang;
+        for (var i = 0; i < langs.length; i++) {
+            lang = langs[i];
+            if (validLangs.indexOf(lang) >= 0) {
+                $translate.use(lang);
+                break;
+            }
+        }
+    })
+
+    $scope.$on("$locationChangeSuccess", function () {
+        var lang = $location.search().lang;
+        if (lang) {
+            $translate.use(lang);
+        }
+    });
 
     $scope.needActions = {
         'rm': 'Del',
@@ -46,78 +116,136 @@ syncthing.controller('SyncthingCtrl', function ($scope, $http) {
         'touch': 'asterisk',
     }
 
-    // Strings before bools look better
-    $scope.settings = [
-    {id: 'ListenStr', descr: 'Sync Protocol Listen Addresses', type: 'text'},
-    {id: 'MaxSendKbps', descr: 'Outgoing Rate Limit (KiB/s)', type: 'number'},
-    {id: 'RescanIntervalS', descr: 'Rescan Interval (s)', type: 'number'},
-    {id: 'ReconnectIntervalS', descr: 'Reconnect Interval (s)', type: 'number'},
-    {id: 'ParallelRequests', descr: 'Max Outstanding Requests', type: 'number'},
-    {id: 'MaxChangeKbps', descr: 'Max File Change Rate (KiB/s)', type: 'number'},
+    $scope.$on('UIOnline', function (event, arg) {
+        console.log('UIOnline');
+        $scope.init();
+        restarting = false;
+        $('#networkError').modal('hide');
+        $('#restarting').modal('hide');
+        $('#shutdown').modal('hide');
+    });
 
-    {id: 'LocalAnnPort', descr: 'Local Discovery Port', type: 'number'},
-    {id: 'LocalAnnEnabled', descr: 'Local Discovery', type: 'bool'},
-    {id: 'GlobalAnnEnabled', descr: 'Global Discovery', type: 'bool'},
-    {id: 'StartBrowser', descr: 'Start Browser', type: 'bool'},
-    {id: 'UPnPEnabled', descr: 'Enable UPnP', type: 'bool'},
-    {id: 'UREnabled', descr: 'Anonymous Usage Reporting', type: 'bool'},
-    ];
-
-    $scope.guiSettings = [
-    {id: 'Address', descr: 'GUI Listen Addresses', type: 'text', restart: true},
-    {id: 'User', descr: 'GUI Authentication User', type: 'text', restart: true},
-    {id: 'Password', descr: 'GUI Authentication Password', type: 'password', restart: true},
-    {id: 'UseTLS', descr: 'Use HTTPS for GUI', type: 'bool', restart: true},
-    {id: 'APIKey', descr: 'API Key', type: 'apikey'},
-    ];
-
-    function getSucceeded() {
-        if (!getOK) {
-            $scope.init();
-            $('#networkError').modal('hide');
-            getOK = true;
-        }
-        if (restarting) {
-            $scope.init();
-            $('#restarting').modal('hide');
-            $('#shutdown').modal('hide');
-            restarting = false;
-        }
-    }
-
-    function getFailed() {
-        if (restarting) {
-            return;
-        }
-        if (getOK) {
+    $scope.$on('UIOffline', function (event, arg) {
+        console.log('UIOffline');
+        if (!restarting) {
             $('#networkError').modal({backdrop: 'static', keyboard: false});
-            getOK = false;
         }
+    });
+
+    $scope.$on('StateChanged', function (event, arg) {
+        var data = arg.data;
+        if ($scope.model[data.repo]) {
+            $scope.model[data.repo].state = data.to;
+        }
+    });
+
+    $scope.$on('LocalIndexUpdated', function (event, arg) {
+        var data = arg.data;
+        refreshRepo(data.repo);
+
+        // Update completion status for all nodes that we share this repo with.
+        $scope.repos[data.repo].Nodes.forEach(function (nodeCfg) {
+            refreshCompletion(nodeCfg.NodeID, data.repo);
+        });
+    });
+
+    $scope.$on('RemoteIndexUpdated', function (event, arg) {
+        var data = arg.data;
+        refreshRepo(data.repo);
+        refreshCompletion(data.node, data.repo);
+    });
+
+    $scope.$on('NodeDisconnected', function (event, arg) {
+        delete $scope.connections[arg.data.id];
+    });
+
+    $scope.$on('NodeConnected', function (event, arg) {
+        if (!$scope.connections[arg.data.id]) {
+            $scope.connections[arg.data.id] = {
+                inbps: 0,
+                outbps: 0,
+                InBytesTotal: 0,
+                OutBytesTotal: 0,
+                Address: arg.data.addr,
+            };
+        }
+    });
+
+    $scope.$on('ConfigLoaded', function (event) {
+        if ($scope.config.Options.URAccepted == 0) {
+            // If usage reporting has been neither accepted nor declined,
+            // we want to ask the user to make a choice. But we don't want
+            // to bug them during initial setup, so we set a cookie with
+            // the time of the first visit. When that cookie is present
+            // and the time is more than four hours ago, we ask the
+            // question.
+
+            var firstVisit = document.cookie.replace(/(?:(?:^|.*;\s*)firstVisit\s*\=\s*([^;]*).*$)|^.*$/, "$1");
+            if (!firstVisit) {
+                document.cookie = "firstVisit=" + Date.now() + ";max-age=" + 30*24*3600;
+            } else {
+                if (+firstVisit < Date.now() - 4*3600*1000){
+                    $('#ur').modal({backdrop: 'static', keyboard: false});
+                }
+            }
+        }
+    })
+
+    var debouncedFuncs = {};
+
+    function refreshRepo(repo) {
+        var key = "refreshRepo" + repo;
+        if (!debouncedFuncs[key]) {
+            debouncedFuncs[key] = debounce(function () {
+                $http.get(urlbase + '/model?repo=' + encodeURIComponent(repo)).success(function (data) {
+                    $scope.model[repo] = data;
+                    console.log("refreshRepo", repo, data);
+                });
+            }, 1000, true);
+        }
+        debouncedFuncs[key]();
     }
 
-    $scope.refresh = function () {
+    function refreshSystem() {
         $http.get(urlbase + '/system').success(function (data) {
-            getSucceeded();
+            $scope.myID = data.myID;
             $scope.system = data;
-        }).error(function () {
-            getFailed();
+            console.log("refreshSystem", data);
         });
-        Object.keys($scope.repos).forEach(function (id) {
-            if (typeof $scope.model[id] === 'undefined') {
-                // Never fetched before
-                $http.get(urlbase + '/model?repo=' + encodeURIComponent(id)).success(function (data) {
-                    $scope.model[id] = data;
-                });
-            } else {
-                $http.get(urlbase + '/model/version?repo=' + encodeURIComponent(id)).success(function (data) {
-                    if (data.version > $scope.model[id].version) {
-                        $http.get(urlbase + '/model?repo=' + encodeURIComponent(id)).success(function (data) {
-                            $scope.model[id] = data;
-                        });
+    }
+
+    function refreshCompletion(node, repo) {
+        if (node === $scope.myID) {
+            return
+        }
+
+        var key = "refreshCompletion" + node + repo;
+        if (!debouncedFuncs[key]) {
+            debouncedFuncs[key] = debounce(function () {
+                $http.get(urlbase + '/completion?node=' + node + '&repo=' + encodeURIComponent(repo)).success(function (data) {
+                    if (!$scope.completion[node]) {
+                        $scope.completion[node] = {};
                     }
+                    $scope.completion[node][repo] = data.completion;
+
+                    var tot = 0, cnt = 0;
+                    for (var cmp in $scope.completion[node]) {
+                        if (cmp === "_total") {
+                            continue;
+                        }
+                        tot += $scope.completion[node][cmp];
+                        cnt += 1;
+                    }
+                    $scope.completion[node]._total = tot / cnt;
+
+                    console.log("refreshCompletion", node, repo, $scope.completion[node]);
                 });
-            }
-        });
+            }, 1000, true);
+        }
+        debouncedFuncs[key]();
+    }
+
+    function refreshConnectionStats() {
         $http.get(urlbase + '/connections').success(function (data) {
             var now = Date.now(),
             td = (now - prevDate) / 1000,
@@ -137,29 +265,83 @@ syncthing.controller('SyncthingCtrl', function ($scope, $http) {
                 }
             }
             $scope.connections = data;
+            console.log("refreshConnections", data);
         });
+    }
+
+    function refreshErrors() {
         $http.get(urlbase + '/errors').success(function (data) {
             $scope.errors = data;
+            console.log("refreshErrors", data);
         });
+    }
+
+    function refreshConfig() {
+        $http.get(urlbase + '/config').success(function (data) {
+            var hasConfig = !isEmptyObject($scope.config);
+
+            $scope.config = data;
+            $scope.config.Options.ListenStr = $scope.config.Options.ListenAddress.join(', ');
+
+            $scope.nodes = $scope.config.Nodes;
+            $scope.nodes.sort(nodeCompare);
+
+            $scope.repos = repoMap($scope.config.Repositories);
+            Object.keys($scope.repos).forEach(function (repo) {
+                refreshRepo(repo);
+                $scope.repos[repo].Nodes.forEach(function (nodeCfg) {
+                    refreshCompletion(nodeCfg.NodeID, repo);
+                });
+            });
+
+            if (!hasConfig) {
+                $scope.$emit('ConfigLoaded');
+            }
+
+            console.log("refreshConfig", data);
+        });
+
+        $http.get(urlbase + '/config/sync').success(function (data) {
+            $scope.configInSync = data.configInSync;
+        });
+    }
+
+    $scope.init = function() {
+        refreshSystem();
+        refreshConfig();
+        refreshConnectionStats();
+
+        $http.get(urlbase + '/version').success(function (data) {
+            $scope.version = data;
+        });
+
+        $http.get(urlbase + '/report').success(function (data) {
+            $scope.reportData = data;
+        });
+
+        $http.get(urlbase + '/upgrade').success(function (data) {
+            $scope.upgradeInfo = data;
+        }).error(function () {
+            $scope.upgradeInfo = {};
+        });
+    };
+
+    $scope.refresh = function () {
+        refreshSystem();
+        refreshConnectionStats();
+        refreshErrors();
     };
 
     $scope.repoStatus = function (repo) {
         if (typeof $scope.model[repo] === 'undefined') {
-            return 'Unknown';
+            return 'unknown';
         }
 
         if ($scope.model[repo].invalid !== '') {
-            return 'Stopped';
+            return 'stopped';
         }
 
-        var state = '' + $scope.model[repo].state;
-        state = state[0].toUpperCase() + state.substr(1);
-
-        if (state == "Syncing" || state == "Idle") {
-            state += " (" + $scope.syncPercentage(repo) + "%)";
-        }
-
-        return state;
+        return '' + $scope.model[repo].state;
     };
 
     $scope.repoClass = function (repo) {
@@ -178,6 +360,9 @@ syncthing.controller('SyncthingCtrl', function ($scope, $http) {
         if (state == 'syncing') {
             return 'primary';
         }
+        if (state == 'scanning') {
+            return 'primary';
+        }
         return 'info';
     };
 
@@ -193,23 +378,9 @@ syncthing.controller('SyncthingCtrl', function ($scope, $http) {
         return Math.floor(pct);
     };
 
-    $scope.nodeStatus = function (nodeCfg) {
-        var conn = $scope.connections[nodeCfg.NodeID];
-        if (conn) {
-            if (conn.Completion === 100) {
-                return 'Up to Date';
-            } else {
-                return 'Syncing (' + conn.Completion + '%)';
-            }
-        }
-
-        return 'Disconnected';
-    };
-
     $scope.nodeIcon = function (nodeCfg) {
-        var conn = $scope.connections[nodeCfg.NodeID];
-        if (conn) {
-            if (conn.Completion === 100) {
+        if ($scope.connections[nodeCfg.NodeID]) {
+            if ($scope.completion[nodeCfg.NodeID] && $scope.completion[nodeCfg.NodeID]._total === 100) {
                 return 'ok';
             } else {
                 return 'refresh';
@@ -220,9 +391,8 @@ syncthing.controller('SyncthingCtrl', function ($scope, $http) {
     };
 
     $scope.nodeClass = function (nodeCfg) {
-        var conn = $scope.connections[nodeCfg.NodeID];
-        if (conn) {
-            if (conn.Completion === 100) {
+        if ($scope.connections[nodeCfg.NodeID]) {
+            if ($scope.completion[nodeCfg.NodeID] && $scope.completion[nodeCfg.NodeID]._total === 100) {
                 return 'success';
             } else {
                 return 'primary';
@@ -336,6 +506,8 @@ syncthing.controller('SyncthingCtrl', function ($scope, $http) {
 
     $scope.restart = function () {
         restarting = true;
+        $scope.restartingTitle = "Restarting"
+        $scope.restartingBody = "Syncthing is restarting."
         $('#restarting').modal({backdrop: 'static', keyboard: false});
         $http.post(urlbase + '/restart');
         $scope.configInSync = true;
@@ -354,6 +526,18 @@ syncthing.controller('SyncthingCtrl', function ($scope, $http) {
 
             $scope.protocolChanged = false;
         }
+    };
+
+    $scope.upgrade = function () {
+        $scope.restartingTitle = "Upgrading"
+        $scope.restartingBody = "Syncthing is upgrading."
+        $('#restarting').modal({backdrop: 'static', keyboard: false});
+        $http.post(urlbase + '/upgrade').success(function () {
+            restarting = true;
+            $scope.restartingBody = "Syncthing is restarting into the new version."
+        }).error(function () {
+            $('#restarting').modal('hide');
+        });
     };
 
     $scope.shutdown = function () {
@@ -378,7 +562,7 @@ syncthing.controller('SyncthingCtrl', function ($scope, $http) {
     };
 
     $scope.addNode = function () {
-        $scope.currentNode = {AddressesStr: 'dynamic'};
+        $scope.currentNode = {AddressesStr: 'dynamic', Compression: true};
         $scope.editingExisting = false;
         $scope.editingSelf = false;
         $scope.nodeEditor.$setPristine();
@@ -410,7 +594,6 @@ syncthing.controller('SyncthingCtrl', function ($scope, $http) {
 
         $('#editNode').modal('hide');
         nodeCfg = $scope.currentNode;
-        nodeCfg.NodeID = nodeCfg.NodeID.replace(/ /g, '').replace(/-/g, '').toUpperCase().trim();
         nodeCfg.Addresses = nodeCfg.AddressesStr.split(',').map(function (x) { return x.trim(); });
 
         done = false;
@@ -559,54 +742,7 @@ syncthing.controller('SyncthingCtrl', function ($scope, $http) {
         cfg.APIKey = randomString(30, 32);
     };
 
-    $scope.init = function() {
-        $http.get(urlbase + '/version').success(function (data) {
-            $scope.version = data;
-        });
 
-        $http.get(urlbase + '/system').success(function (data) {
-            $scope.system = data;
-            $scope.myID = data.myID;
-        });
-
-        $http.get(urlbase + '/config').success(function (data) {
-            $scope.config = data;
-            $scope.config.Options.ListenStr = $scope.config.Options.ListenAddress.join(', ');
-
-            $scope.nodes = $scope.config.Nodes;
-            $scope.nodes.sort(nodeCompare);
-
-            $scope.repos = repoMap($scope.config.Repositories);
-
-            $scope.refresh();
-
-            if ($scope.config.Options.URAccepted == 0) {
-                // If usage reporting has been neither accepted nor declined,
-                // we want to ask the user to make a choice. But we don't want
-                // to bug them during initial setup, so we set a cookie with
-                // the time of the first visit. When that cookie is present
-                // and the time is more than four hours ago, we ask the
-                // question.
-
-                var firstVisit = document.cookie.replace(/(?:(?:^|.*;\s*)firstVisit\s*\=\s*([^;]*).*$)|^.*$/, "$1");
-                if (!firstVisit) {
-                    document.cookie = "firstVisit=" + Date.now() + ";max-age=" + 30*24*3600;
-                } else {
-                    if (+firstVisit < Date.now() - 4*3600*1000){
-                        $('#ur').modal({backdrop: 'static', keyboard: false});
-                    }
-                }
-            }
-        });
-
-        $http.get(urlbase + '/config/sync').success(function (data) {
-            $scope.configInSync = data.configInSync;
-        });
-
-        $http.get(urlbase + '/report').success(function (data) {
-            $scope.reportData = data;
-        });
-    };
 
     $scope.acceptUR = function () {
         $scope.config.Options.URAccepted = 1000; // Larger than the largest existing report version
@@ -648,6 +784,10 @@ syncthing.controller('SyncthingCtrl', function ($scope, $http) {
         $http.post(urlbase + "/model/override?repo=" + encodeURIComponent(repo)).success(function () {
             $scope.refresh();
         });
+    };
+
+    $scope.about = function () {
+        $('#about').modal('show');
     };
 
     $scope.init();
@@ -711,7 +851,49 @@ function randomString(len, bits)
         newStr = Math.random().toString(bits).slice(2);
         outStr += newStr.slice(0, Math.min(newStr.length, (len - outStr.length)));
     }
-    return outStr.toUpperCase();
+    return outStr.toLowerCase();
+}
+
+function isEmptyObject(obj) {
+    var name;
+    for (name in obj) {
+        return false;
+    }
+    return true;
+}
+
+function debounce(func, wait) {
+    var timeout, args, context, timestamp, result, again;
+
+    var later = function() {
+        var last = Date.now() - timestamp;
+        if (last < wait) {
+            timeout = setTimeout(later, wait - last);
+        } else {
+            timeout = null;
+            if (again) {
+                result = func.apply(context, args);
+                context = args = null;
+                again = false;
+            }
+        }
+    };
+
+    return function() {
+        context = this;
+        args = arguments;
+        timestamp = Date.now();
+        var callNow = !timeout;
+        if (!timeout) {
+            timeout = setTimeout(later, wait);
+            result = func.apply(context, args);
+            context = args = null;
+        } else {
+            again = true;
+        }
+
+        return result;
+    };
 }
 
 syncthing.filter('natural', function () {
@@ -774,17 +956,6 @@ syncthing.filter('alwaysNumber', function () {
             return 0;
         }
         return input;
-    };
-});
-
-syncthing.filter('chunkID', function () {
-    return function (input) {
-        if (input === undefined)
-            return "";
-        var parts = input.match(/.{1,6}/g);
-        if (!parts)
-            return "";
-        return parts.join('-');
     };
 });
 
@@ -851,7 +1022,7 @@ syncthing.directive('uniqueRepo', function() {
     };
 });
 
-syncthing.directive('validNodeid', function() {
+syncthing.directive('validNodeid', function($http) {
     return {
         require: 'ngModel',
         link: function(scope, elm, attrs, ctrl) {
@@ -860,15 +1031,33 @@ syncthing.directive('validNodeid', function() {
                     // we shouldn't validate
                     ctrl.$setValidity('validNodeid', true);
                 } else {
-                    var cleaned = viewValue.replace(/ /g, '').replace(/-/g, '').toUpperCase().trim();
-                    if (cleaned.match(/^[A-Z2-7]{52}$/)) {
-                        ctrl.$setValidity('validNodeid', true);
-                    } else {
-                        ctrl.$setValidity('validNodeid', false);
-                    }
+                    $http.get(urlbase + '/nodeid?id='+viewValue).success(function (resp) {
+                        if (resp.error) {
+                            ctrl.$setValidity('validNodeid', false);
+                        } else {
+                            scope.currentNode.NodeID = resp.id;
+                            ctrl.$setValidity('validNodeid', true);
+                        }
+                    });
                 }
                 return viewValue;
             });
         }
     };
+});
+
+syncthing.directive('modal', function () {
+    return {
+        restrict: 'E',
+        templateUrl: 'modal.html',
+        replace: true,
+        transclude: true,
+        scope: {
+            title: '@',
+            status: '@',
+            icon: '@',
+            close: '@',
+            large: '@',
+        },
+    }
 });

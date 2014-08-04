@@ -1,6 +1,6 @@
-// Copyright (C) 2014 Jakob Borg and other contributors. All rights reserved.
-// Use of this source code is governed by an MIT-style license that can be
-// found in the LICENSE file.
+// Copyright (C) 2014 Jakob Borg and Contributors (see the CONTRIBUTORS file).
+// All rights reserved. Use of this source code is governed by an MIT-style
+// license that can be found in the LICENSE file.
 
 // Package logger implements a standardized logger with callback functionality
 package logger
@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 )
 
@@ -35,7 +36,7 @@ var DefaultLogger = New()
 
 func New() *Logger {
 	return &Logger{
-		logger: log.New(os.Stderr, "", log.Ltime),
+		logger: log.New(os.Stdout, "", log.Ltime),
 	}
 }
 
@@ -55,7 +56,7 @@ func (l *Logger) SetPrefix(prefix string) {
 
 func (l *Logger) callHandlers(level LogLevel, s string) {
 	for _, h := range l.handlers[level] {
-		h(level, s)
+		h(level, strings.TrimSpace(s))
 	}
 }
 
@@ -128,7 +129,7 @@ func (l *Logger) Fatalln(vals ...interface{}) {
 	s := fmt.Sprintln(vals...)
 	l.logger.Output(2, "FATAL: "+s)
 	l.callHandlers(LevelFatal, s)
-	os.Exit(3)
+	os.Exit(1)
 }
 
 func (l *Logger) Fatalf(format string, vals ...interface{}) {
@@ -137,11 +138,16 @@ func (l *Logger) Fatalf(format string, vals ...interface{}) {
 	s := fmt.Sprintf(format, vals...)
 	l.logger.Output(2, "FATAL: "+s)
 	l.callHandlers(LevelFatal, s)
-	os.Exit(3)
+	os.Exit(1)
 }
 
 func (l *Logger) FatalErr(err error) {
 	if err != nil {
-		l.Fatalf(err.Error())
+		l.mut.Lock()
+		defer l.mut.Unlock()
+		l.logger.SetFlags(l.logger.Flags() | log.Lshortfile)
+		l.logger.Output(2, "FATAL: "+err.Error())
+		l.callHandlers(LevelFatal, err.Error())
+		os.Exit(1)
 	}
 }

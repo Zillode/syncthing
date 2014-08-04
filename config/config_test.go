@@ -1,6 +1,6 @@
-// Copyright (C) 2014 Jakob Borg and other contributors. All rights reserved.
-// Use of this source code is governed by an MIT-style license that can be
-// found in the LICENSE file.
+// Copyright (C) 2014 Jakob Borg and Contributors (see the CONTRIBUTORS file).
+// All rights reserved. Use of this source code is governed by an MIT-style
+// license that can be found in the LICENSE file.
 
 package config
 
@@ -11,14 +11,22 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/calmh/syncthing/files"
-	"github.com/calmh/syncthing/scanner"
+	"github.com/syncthing/syncthing/protocol"
 )
+
+var node1, node2, node3, node4 protocol.NodeID
+
+func init() {
+	node1, _ = protocol.NodeIDFromString("AIR6LPZ7K4PTTUXQSMUUCPQ5YWOEDFIIQJUG7772YQXXR5YD6AWQ")
+	node2, _ = protocol.NodeIDFromString("GYRZZQB-IRNPV4Z-T7TC52W-EQYJ3TT-FDQW6MW-DFLMU42-SSSU6EM-FBK2VAY")
+	node3, _ = protocol.NodeIDFromString("LGFPDIT-7SKNNJL-VJZA4FC-7QNCRKA-CE753K7-2BW5QDK-2FOZ7FR-FEP57QJ")
+	node4, _ = protocol.NodeIDFromString("P56IOI7-MZJNU2Y-IQGDREY-DM2MGTI-MGL3BXN-PQ6W5BM-TBBZ4TJ-XZWICQ2")
+}
 
 func TestDefaultValues(t *testing.T) {
 	expected := OptionsConfiguration{
 		ListenAddress:      []string{"0.0.0.0:22000"},
-		GlobalAnnServer:    "announce.syncthing.net:22025",
+		GlobalAnnServer:    "announce.syncthing.net:22026",
 		GlobalAnnEnabled:   true,
 		LocalAnnEnabled:    true,
 		LocalAnnPort:       21025,
@@ -31,7 +39,7 @@ func TestDefaultValues(t *testing.T) {
 		UPnPEnabled:        true,
 	}
 
-	cfg, err := Load(bytes.NewReader(nil), "nodeID")
+	cfg, err := Load(bytes.NewReader(nil), node1)
 	if err != io.EOF {
 		t.Error(err)
 	}
@@ -45,10 +53,16 @@ func TestNodeConfig(t *testing.T) {
 	v1data := []byte(`
 <configuration version="1">
     <repository id="test" directory="~/Sync">
-        <node id="NODE1" name="node one">
+        <node id="AIR6LPZ7K4PTTUXQSMUUCPQ5YWOEDFIIQJUG7772YQXXR5YD6AWQ" name="node one">
             <address>a</address>
         </node>
-        <node id="NODE2" name="node two">
+        <node id="P56IOI7MZJNU2IQGDREYDM2MGTMGL3BXNPQ6W5BTBBZ4TJXZWICQ" name="node two">
+            <address>b</address>
+        </node>
+        <node id="AIR6LPZ7K4PTTUXQSMUUCPQ5YWOEDFIIQJUG7772YQXXR5YD6AWQ" name="node one">
+            <address>a</address>
+        </node>
+        <node id="P56IOI7MZJNU2IQGDREYDM2MGTMGL3BXNPQ6W5BTBBZ4TJXZWICQ" name="node two">
             <address>b</address>
         </node>
     </repository>
@@ -61,20 +75,38 @@ func TestNodeConfig(t *testing.T) {
 	v2data := []byte(`
 <configuration version="2">
     <repository id="test" directory="~/Sync" ro="true">
-        <node id="NODE1"/>
-        <node id="NODE2"/>
+        <node id="P56IOI7MZJNU2IQGDREYDM2MGTMGL3BXNPQ6W5BTBBZ4TJXZWICQ"/>
+        <node id="AIR6LPZ7K4PTTUXQSMUUCPQ5YWOEDFIIQJUG7772YQXXR5YD6AWQ"/>
+        <node id="C4YBIESWDUAIGU62GOSRXCRAAJDWVE3TKCPMURZE2LH5QHAF576A"/>
+        <node id="P56IOI7MZJNU2IQGDREYDM2MGTMGL3BXNPQ6W5BTBBZ4TJXZWICQ"/>
+        <node id="AIR6LPZ7K4PTTUXQSMUUCPQ5YWOEDFIIQJUG7772YQXXR5YD6AWQ"/>
+        <node id="C4YBIESWDUAIGU62GOSRXCRAAJDWVE3TKCPMURZE2LH5QHAF576A"/>
     </repository>
-    <node id="NODE1" name="node one">
+    <node id="AIR6LPZ7K4PTTUXQSMUUCPQ5YWOEDFIIQJUG7772YQXXR5YD6AWQ" name="node one">
         <address>a</address>
     </node>
-    <node id="NODE2" name="node two">
+    <node id="P56IOI7MZJNU2IQGDREYDM2MGTMGL3BXNPQ6W5BTBBZ4TJXZWICQ" name="node two">
         <address>b</address>
     </node>
 </configuration>
 `)
 
-	for i, data := range [][]byte{v1data, v2data} {
-		cfg, err := Load(bytes.NewReader(data), "NODE1")
+	v3data := []byte(`
+<configuration version="3">
+    <repository id="test" directory="~/Sync" ro="true" ignorePerms="false">
+        <node id="AIR6LPZ-7K4PTTV-UXQSMUU-CPQ5YWH-OEDFIIQ-JUG777G-2YQXXR5-YD6AWQR" compression="false"></node>
+        <node id="P56IOI7-MZJNU2Y-IQGDREY-DM2MGTI-MGL3BXN-PQ6W5BM-TBBZ4TJ-XZWICQ2" compression="false"></node>
+    </repository>
+    <node id="AIR6LPZ-7K4PTTV-UXQSMUU-CPQ5YWH-OEDFIIQ-JUG777G-2YQXXR5-YD6AWQR" name="node one" compression="true">
+        <address>a</address>
+    </node>
+    <node id="P56IOI7-MZJNU2Y-IQGDREY-DM2MGTI-MGL3BXN-PQ6W5BM-TBBZ4TJ-XZWICQ2" name="node two" compression="true">
+        <address>b</address>
+    </node>
+</configuration>`)
+
+	for i, data := range [][]byte{v1data, v2data, v3data} {
+		cfg, err := Load(bytes.NewReader(data), node1)
 		if err != nil {
 			t.Error(err)
 		}
@@ -83,26 +115,28 @@ func TestNodeConfig(t *testing.T) {
 			{
 				ID:        "test",
 				Directory: "~/Sync",
-				Nodes:     []NodeConfiguration{{NodeID: "NODE1"}, {NodeID: "NODE2"}},
+				Nodes:     []NodeConfiguration{{NodeID: node1}, {NodeID: node4}},
 				ReadOnly:  true,
 			},
 		}
 		expectedNodes := []NodeConfiguration{
 			{
-				NodeID:    "NODE1",
-				Name:      "node one",
-				Addresses: []string{"a"},
+				NodeID:      node1,
+				Name:        "node one",
+				Addresses:   []string{"a"},
+				Compression: true,
 			},
 			{
-				NodeID:    "NODE2",
-				Name:      "node two",
-				Addresses: []string{"b"},
+				NodeID:      node4,
+				Name:        "node two",
+				Addresses:   []string{"b"},
+				Compression: true,
 			},
 		}
-		expectedNodeIDs := []string{"NODE1", "NODE2"}
+		expectedNodeIDs := []protocol.NodeID{node1, node4}
 
-		if cfg.Version != 2 {
-			t.Errorf("%d: Incorrect version %d != 2", i, cfg.Version)
+		if cfg.Version != 3 {
+			t.Errorf("%d: Incorrect version %d != 3", i, cfg.Version)
 		}
 		if !reflect.DeepEqual(cfg.Repositories, expectedRepos) {
 			t.Errorf("%d: Incorrect Repositories\n  A: %#v\n  E: %#v", i, cfg.Repositories, expectedRepos)
@@ -113,23 +147,25 @@ func TestNodeConfig(t *testing.T) {
 		if !reflect.DeepEqual(cfg.Repositories[0].NodeIDs(), expectedNodeIDs) {
 			t.Errorf("%d: Incorrect NodeIDs\n  A: %#v\n  E: %#v", i, cfg.Repositories[0].NodeIDs(), expectedNodeIDs)
 		}
+
+		if len(cfg.NodeMap()) != len(expectedNodes) {
+			t.Errorf("Unexpected number of NodeMap() entries")
+		}
+		if len(cfg.RepoMap()) != len(expectedRepos) {
+			t.Errorf("Unexpected number of RepoMap() entries")
+		}
 	}
 }
 
 func TestNoListenAddress(t *testing.T) {
 	data := []byte(`<configuration version="1">
-    <repository directory="~/Sync">
-        <node id="..." name="...">
-            <address>dynamic</address>
-        </node>
-    </repository>
     <options>
         <listenAddress></listenAddress>
     </options>
 </configuration>
 `)
 
-	cfg, err := Load(bytes.NewReader(data), "nodeID")
+	cfg, err := Load(bytes.NewReader(data), node1)
 	if err != nil {
 		t.Error(err)
 	}
@@ -142,15 +178,10 @@ func TestNoListenAddress(t *testing.T) {
 
 func TestOverriddenValues(t *testing.T) {
 	data := []byte(`<configuration version="2">
-    <repository directory="~/Sync">
-        <node id="..." name="...">
-            <address>dynamic</address>
-        </node>
-    </repository>
     <options>
        <listenAddress>:23000</listenAddress>
         <allowDelete>false</allowDelete>
-        <globalAnnounceServer>syncthing.nym.se:22025</globalAnnounceServer>
+        <globalAnnounceServer>syncthing.nym.se:22026</globalAnnounceServer>
         <globalAnnounceEnabled>false</globalAnnounceEnabled>
         <localAnnounceEnabled>false</localAnnounceEnabled>
         <localAnnouncePort>42123</localAnnouncePort>
@@ -167,7 +198,7 @@ func TestOverriddenValues(t *testing.T) {
 
 	expected := OptionsConfiguration{
 		ListenAddress:      []string{":23000"},
-		GlobalAnnServer:    "syncthing.nym.se:22025",
+		GlobalAnnServer:    "syncthing.nym.se:22026",
 		GlobalAnnEnabled:   false,
 		LocalAnnEnabled:    false,
 		LocalAnnPort:       42123,
@@ -180,7 +211,7 @@ func TestOverriddenValues(t *testing.T) {
 		UPnPEnabled:        false,
 	}
 
-	cfg, err := Load(bytes.NewReader(data), "nodeID")
+	cfg, err := Load(bytes.NewReader(data), node1)
 	if err != nil {
 		t.Error(err)
 	}
@@ -190,16 +221,16 @@ func TestOverriddenValues(t *testing.T) {
 	}
 }
 
-func TestNodeAddresses(t *testing.T) {
+func TestNodeAddressesDynamic(t *testing.T) {
 	data := []byte(`
 <configuration version="2">
-    <node id="n1">
-        <address>dynamic</address>
-    </node>
-    <node id="n2">
+    <node id="AIR6LPZ7K4PTTUXQSMUUCPQ5YWOEDFIIQJUG7772YQXXR5YD6AWQ">
         <address></address>
     </node>
-    <node id="n3">
+    <node id="GYRZZQBIRNPV4T7TC52WEQYJ3TFDQW6MWDFLMU4SSSU6EMFBK2VA">
+    </node>
+    <node id="LGFPDIT7SKNNJVJZA4FC7QNCRKCE753K72BW5QD2FOZ7FRFEP57Q">
+        <address>dynamic</address>
     </node>
 </configuration>
 `)
@@ -207,25 +238,28 @@ func TestNodeAddresses(t *testing.T) {
 	name, _ := os.Hostname()
 	expected := []NodeConfiguration{
 		{
-			NodeID:    "N1",
-			Addresses: []string{"dynamic"},
+			NodeID:      node1,
+			Addresses:   []string{"dynamic"},
+			Compression: true,
 		},
 		{
-			NodeID:    "N2",
-			Addresses: []string{"dynamic"},
+			NodeID:      node2,
+			Addresses:   []string{"dynamic"},
+			Compression: true,
 		},
 		{
-			NodeID:    "N3",
-			Addresses: []string{"dynamic"},
+			NodeID:      node3,
+			Addresses:   []string{"dynamic"},
+			Compression: true,
 		},
 		{
-			NodeID:    "N4",
+			NodeID:    node4,
 			Name:      name, // Set when auto created
 			Addresses: []string{"dynamic"},
 		},
 	}
 
-	cfg, err := Load(bytes.NewReader(data), "N4")
+	cfg, err := Load(bytes.NewReader(data), node4)
 	if err != nil {
 		t.Error(err)
 	}
@@ -235,145 +269,85 @@ func TestNodeAddresses(t *testing.T) {
 	}
 }
 
-func TestStripNodeIs(t *testing.T) {
+func TestNodeAddressesStatic(t *testing.T) {
 	data := []byte(`
-<configuration version="2">
-    <node id="AAAA-BBBB-CCCC">
-        <address>dynamic</address>
+<configuration version="3">
+    <node id="AIR6LPZ7K4PTTUXQSMUUCPQ5YWOEDFIIQJUG7772YQXXR5YD6AWQ">
+        <address>192.0.2.1</address>
+        <address>192.0.2.2</address>
     </node>
-    <node id="AAAA BBBB DDDD">
-        <address></address>
+    <node id="GYRZZQBIRNPV4T7TC52WEQYJ3TFDQW6MWDFLMU4SSSU6EMFBK2VA">
+        <address>192.0.2.3:6070</address>
+        <address>[2001:db8::42]:4242</address>
     </node>
-    <node id="AAAABBBBEEEE">
-        <address></address>
+    <node id="LGFPDIT7SKNNJVJZA4FC7QNCRKCE753K72BW5QD2FOZ7FRFEP57Q">
+        <address>[2001:db8::44]:4444</address>
+        <address>192.0.2.4:6090</address>
     </node>
-    <repository directory="~/Sync">
-        <node id="AAA ABBB-BCC CC" name=""></node>
-        <node id="AA-AAB BBBD-DDD" name=""></node>
-        <node id="AAA AB-BBB EEE-E" name=""></node>
-    </repository>
 </configuration>
 `)
 
+	name, _ := os.Hostname()
 	expected := []NodeConfiguration{
 		{
-			NodeID:    "AAAABBBBCCCC",
-			Addresses: []string{"dynamic"},
+			NodeID:    node1,
+			Addresses: []string{"192.0.2.1", "192.0.2.2"},
 		},
 		{
-			NodeID:    "AAAABBBBDDDD",
-			Addresses: []string{"dynamic"},
+			NodeID:    node2,
+			Addresses: []string{"192.0.2.3:6070", "[2001:db8::42]:4242"},
 		},
 		{
-			NodeID:    "AAAABBBBEEEE",
+			NodeID:    node3,
+			Addresses: []string{"[2001:db8::44]:4444", "192.0.2.4:6090"},
+		},
+		{
+			NodeID:    node4,
+			Name:      name, // Set when auto created
 			Addresses: []string{"dynamic"},
 		},
 	}
 
-	cfg, err := Load(bytes.NewReader(data), "n4")
+	cfg, err := Load(bytes.NewReader(data), node4)
 	if err != nil {
 		t.Error(err)
 	}
 
-	for i := range expected {
-		if !reflect.DeepEqual(cfg.Nodes[i], expected[i]) {
-			t.Errorf("Nodes[%d] differ;\n  E: %#v\n  A: %#v", i, expected[i], cfg.Nodes[i])
-		}
-		if cfg.Repositories[0].Nodes[i].NodeID != expected[i].NodeID {
-			t.Errorf("Repo nodes[%d] differ;\n  E: %#v\n  A: %#v", i, expected[i].NodeID, cfg.Repositories[0].Nodes[i].NodeID)
-		}
+	if !reflect.DeepEqual(cfg.Nodes, expected) {
+		t.Errorf("Nodes differ;\n  E: %#v\n  A: %#v", expected, cfg.Nodes)
 	}
 }
 
-func TestSyncOrders(t *testing.T) {
+func TestVersioningConfig(t *testing.T) {
 	data := []byte(`
-<configuration version="2">
-    <node id="AAAA-BBBB-CCCC">
-        <address>dynamic</address>
-    </node>
-    <repository directory="~/Sync">
-        <syncorder>
-            <pattern pattern="\.jpg$" priority="1" />
-        </syncorder>
-        <node id="AAAA-BBBB-CCCC" name=""></node>
-    </repository>
-</configuration>
-`)
+		<configuration version="2">
+			<repository id="test" directory="~/Sync" ro="true">
+				<versioning type="simple">
+					<param key="foo" val="bar"/>
+					<param key="baz" val="quux"/>
+				</versioning>
+			</repository>
+		</configuration>
+		`)
 
-	expected := []SyncOrderPattern{
-		{
-			Pattern: "\\.jpg$",
-			Priority:  1,
-		},
-	}
-
-	cfg, err := Load(bytes.NewReader(data), "n4")
+	cfg, err := Load(bytes.NewReader(data), node4)
 	if err != nil {
 		t.Error(err)
 	}
 
-	for i := range expected {
-		if !reflect.DeepEqual(cfg.Repositories[0].SyncOrderPatterns[i], expected[i]) {
-			t.Errorf("Nodes[%d] differ;\n  E: %#v\n  A: %#v", i, expected[i], cfg.Repositories[0].SyncOrderPatterns[i])
-		}
+	vc := cfg.Repositories[0].Versioning
+	if vc.Type != "simple" {
+		t.Errorf(`vc.Type %q != "simple"`, vc.Type)
 	}
-}
-
-func TestFileSorter(t *testing.T) {
-	rcfg := RepositoryConfiguration{
-		SyncOrderPatterns: []SyncOrderPattern{
-			{"\\.jpg$", 10, nil},
-			{"\\.mov$", 5, nil},
-			{"^camera-uploads", 100, nil},
-		},
+	if l := len(vc.Params); l != 2 {
+		t.Errorf("len(vc.Params) %d != 2", l)
 	}
 
-	f := []scanner.File{
-		{Name: "bar.mov"},
-		{Name: "baz.txt"},
-		{Name: "foo.jpg"},
-		{Name: "frew/foo.jpg"},
-		{Name: "frew/lol.go"},
-		{Name: "frew/rofl.copter"},
-		{Name: "frew/bar.mov"},
-		{Name: "camera-uploads/foo.jpg"},
-		{Name: "camera-uploads/hurr.pl"},
-		{Name: "camera-uploads/herp.mov"},
-		{Name: "camera-uploads/wee.txt"},
+	expected := map[string]string{
+		"foo": "bar",
+		"baz": "quux",
 	}
-
-	files.SortBy(rcfg.FileRanker()).Sort(f)
-
-	expected := []scanner.File{
-		{Name: "camera-uploads/foo.jpg"},
-		{Name: "camera-uploads/herp.mov"},
-		{Name: "camera-uploads/hurr.pl"},
-		{Name: "camera-uploads/wee.txt"},
-		{Name: "foo.jpg"},
-		{Name: "frew/foo.jpg"},
-		{Name: "bar.mov"},
-		{Name: "frew/bar.mov"},
-		{Name: "frew/lol.go"},
-		{Name: "baz.txt"},
-		{Name: "frew/rofl.copter"},
+	if !reflect.DeepEqual(vc.Params, expected) {
+		t.Errorf("vc.Params differ;\n  E: %#v\n  A: %#v", expected, vc.Params)
 	}
-
-	if !reflect.DeepEqual(f, expected) {
-		t.Errorf(
-			"\n\nexpected:\n" +
-			formatFiles(expected) + "\n" +
-			"got:\n" +
-			formatFiles(f) + "\n\n",
-		)
-	}
-}
-
-func formatFiles(f []scanner.File) string {
-	ret := ""
-
-	for _, v := range f {
-		ret += "   " + v.Name + "\n"
-	}
-
-	return ret
 }
