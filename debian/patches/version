@@ -1,0 +1,22 @@
+Description: Added build and version info.
+ gccgo-go doesn't take it from build.sh.
+
+--- syncthing-0.8.19.orig/cmd/syncthing/main.go
++++ syncthing-0.8.19/cmd/syncthing/main.go
+@@ -37,12 +37,12 @@ import (
+ )
+ 
+ var (
+-	Version     = "unknown-dev"
++	Version     = "v0.8.19"
+ 	BuildEnv    = "default"
+-	BuildStamp  = "0"
++	BuildStamp  = "1404812968"
+ 	BuildDate   time.Time
+-	BuildHost   = "unknown"
+-	BuildUser   = "unknown"
++	BuildHost   = "Niklas-Desktop"
++	BuildUser   = "niklas"
+ 	LongVersion string
+ )
+ 
