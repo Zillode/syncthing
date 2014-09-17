@@ -14,7 +14,6 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
-	_ "net/http/pprof"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -27,6 +26,7 @@ import (
 
 	"code.google.com/p/go.crypto/bcrypt"
 	"github.com/juju/ratelimit"
+	"github.com/davecheney/profile"
 	"github.com/syncthing/syncthing/config"
 	"github.com/syncthing/syncthing/discover"
 	"github.com/syncthing/syncthing/events"
@@ -38,6 +38,7 @@ import (
 	"github.com/syncthing/syncthing/upnp"
 	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/syndtr/goleveldb/leveldb/opt"
+
 )
 
 var (
@@ -187,6 +188,8 @@ func main() {
 	flag.Usage = usageFor(flag.CommandLine, usage, extraUsage)
 	flag.Parse()
 
+	defer profile.Start(profile.CPUProfile).Stop()
+	
 	if showVersion {
 		fmt.Println(LongVersion)
 		return
