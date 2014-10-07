@@ -40,7 +40,11 @@ func csrfMiddleware(prefix, apiKey string, next http.Handler) http.Handler {
 	loadCsrfTokens()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Allow requests carrying a valid API key
-		if apiKey != "" && r.Header.Get("X-API-Key") == apiKey {
+		if apiKey != "" {
+			if r.Header.Get("X-API-Key") != apiKey {
+				http.Error(w, "API-Key Error", 403)
+				return
+			}
 			next.ServeHTTP(w, r)
 			return
 		}
