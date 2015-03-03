@@ -92,7 +92,7 @@ func TestIgnores(t *testing.T) {
 
 	// Add some of them to an ignore file
 
-	fd, err := os.Create("s1/.stignore")
+	fd, err := os.Create("s1/.syncthing/ignores.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestIgnores(t *testing.T) {
 
 	// Change the pattern to include some of the files and dirs previously ignored
 
-	fd, err = os.Create("s1/.stignore")
+	fd, err = os.Create("s1/.syncthing/ignores.txt")
 	if err != nil {
 		t.Fatal(err)
 	}

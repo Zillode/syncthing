@@ -26,7 +26,7 @@ import (
 
 func TestIgnore(t *testing.T) {
 	pats := New(true)
-	err := pats.Load("testdata/.stignore")
+	err := pats.Load("testdata/.syncthing/ignores.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestExcludes(t *testing.T) {
 	!ign2
 	`
 	pats := New(true)
-	err := pats.Parse(bytes.NewBufferString(stignore), ".stignore")
+	err := pats.Parse(bytes.NewBufferString(stignore), ".syncthing/ignores.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,12 +111,12 @@ func TestBadPatterns(t *testing.T) {
 		"/[",
 		"**/[",
 		"#include nonexistent",
-		"#include .stignore",
+		"#include .syncthing/ignores.txt",
 		"!#include makesnosense",
 	}
 
 	for _, pat := range badPatterns {
-		err := New(true).Parse(bytes.NewBufferString(pat), ".stignore")
+		err := New(true).Parse(bytes.NewBufferString(pat), ".syncthing/ignores.txt")
 		if err == nil {
 			t.Errorf("No error for pattern %q", pat)
 		}
@@ -125,7 +125,7 @@ func TestBadPatterns(t *testing.T) {
 
 func TestCaseSensitivity(t *testing.T) {
 	ign := New(true)
-	err := ign.Parse(bytes.NewBufferString("test"), ".stignore")
+	err := ign.Parse(bytes.NewBufferString("test"), ".syncthing/ignores.txt")
 	if err != nil {
 		t.Error(err)
 	}
@@ -281,7 +281,7 @@ func TestCommentsAndBlankLines(t *testing.T) {
 
 	`
 	pats := New(true)
-	err := pats.Parse(bytes.NewBufferString(stignore), ".stignore")
+	err := pats.Parse(bytes.NewBufferString(stignore), ".syncthing/ignores.txt")
 	if err != nil {
 		t.Error(err)
 	}
@@ -309,7 +309,7 @@ flamingo
 *.crow
 	`
 	pats := New(false)
-	err := pats.Parse(bytes.NewBufferString(stignore), ".stignore")
+	err := pats.Parse(bytes.NewBufferString(stignore), ".syncthing/ignores.txt")
 	if err != nil {
 		b.Error(err)
 	}
@@ -439,12 +439,12 @@ func TestCacheReload(t *testing.T) {
 
 func TestHash(t *testing.T) {
 	p1 := New(true)
-	err := p1.Load("testdata/.stignore")
+	err := p1.Load("testdata/.syncthing/ignores.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Same list of patterns as testdata/.stignore, after expansion
+	// Same list of patterns as testdata/.syncthing/ignores.txt, after expansion
 	stignore := `
 	dir2/dfile
 	dir3
@@ -455,7 +455,7 @@ func TestHash(t *testing.T) {
 	lost+found
 	`
 	p2 := New(true)
-	err = p2.Parse(bytes.NewBufferString(stignore), ".stignore")
+	err = p2.Parse(bytes.NewBufferString(stignore), ".syncthing/ignores.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -470,7 +470,7 @@ func TestHash(t *testing.T) {
 	lost+found
 	`
 	p3 := New(true)
-	err = p3.Parse(bytes.NewBufferString(stignore), ".stignore")
+	err = p3.Parse(bytes.NewBufferString(stignore), ".syncthing/ignores.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -494,7 +494,7 @@ func TestHash(t *testing.T) {
 
 func TestHashOfEmpty(t *testing.T) {
 	p1 := New(true)
-	err := p1.Load("testdata/.stignore")
+	err := p1.Load("testdata/.syncthing/ignores.txt")
 	if err != nil {
 		t.Fatal(err)
 	}

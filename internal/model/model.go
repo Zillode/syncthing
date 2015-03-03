@@ -838,12 +838,12 @@ func (m *Model) GetIgnores(folder string) ([]string, []string, error) {
 		return lines, nil, fmt.Errorf("Folder %s does not exist", folder)
 	}
 
-	fd, err := os.Open(filepath.Join(cfg.Path, ".stignore"))
+	fd, err := os.Open(filepath.Join(cfg.Path, ".syncthing/ignores.txt"))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return lines, nil, nil
 		}
-		l.Warnln("Loading .stignore:", err)
+		l.Warnln("Loading .syncthing/ignores.txt:", err)
 		return lines, nil, err
 	}
 	defer fd.Close()
@@ -869,9 +869,9 @@ func (m *Model) SetIgnores(folder string, content []string) error {
 		return fmt.Errorf("Folder %s does not exist", folder)
 	}
 
-	fd, err := ioutil.TempFile(cfg.Path, ".syncthing.stignore-"+folder)
+	fd, err := ioutil.TempFile(cfg.Path, ".syncthing/ignores-"+folder+".txt")
 	if err != nil {
-		l.Warnln("Saving .stignore:", err)
+		l.Warnln("Saving .syncthing/ignores.txt:", err)
 		return err
 	}
 	defer os.Remove(fd.Name())
@@ -879,21 +879,21 @@ func (m *Model) SetIgnores(folder string, content []string) error {
 	for _, line := range content {
 		_, err = fmt.Fprintln(fd, line)
 		if err != nil {
-			l.Warnln("Saving .stignore:", err)
+			l.Warnln("Saving .syncthing/ignores.txt:", err)
 			return err
 		}
 	}
 
 	err = fd.Close()
 	if err != nil {
-		l.Warnln("Saving .stignore:", err)
+		l.Warnln("Saving .syncthing/ignores.txt:", err)
 		return err
 	}
 
-	file := filepath.Join(cfg.Path, ".stignore")
+	file := filepath.Join(cfg.Path, ".syncthing/ignores.txt")
 	err = osutil.Rename(fd.Name(), file)
 	if err != nil {
-		l.Warnln("Saving .stignore:", err)
+		l.Warnln("Saving .syncthing/ignores.txt:", err)
 		return err
 	}
 
@@ -1104,7 +1104,7 @@ func (m *Model) AddFolder(cfg config.FolderConfiguration) {
 	}
 
 	ignores := ignore.New(m.cfg.Options().CacheIgnoredFiles)
-	_ = ignores.Load(filepath.Join(cfg.Path, ".stignore")) // Ignore error, there might not be an .stignore
+	_ = ignores.Load(filepath.Join(cfg.Path, ".syncthing/ignores.txt")) // Ignore error, there might not be a .syncthing/ignores.txt
 	m.folderIgnores[cfg.ID] = ignores
 
 	m.addedFolder = true
@@ -1160,7 +1160,7 @@ func (m *Model) ScanFolderSub(folder, sub string) error {
 		return errors.New("no such folder")
 	}
 
-	_ = ignores.Load(filepath.Join(folderCfg.Path, ".stignore")) // Ignore error, there might not be an .stignore
+	_ = ignores.Load(filepath.Join(folderCfg.Path, ".syncthing/ignores.txt")) // Ignore error, there might not be an .syncthing/ignores.txt
 
 	w := &scanner.Walker{
 		Dir:          folderCfg.Path,

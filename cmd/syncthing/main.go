@@ -693,7 +693,7 @@ nextFolder:
 				cfg.InvalidateFolder(id, "folder path missing")
 				continue nextFolder
 			} else if !folder.HasMarker() {
-				l.Warnf("Stopping folder %q - path exists, but folder marker missing, check for mount issues", folder.ID)
+				l.Warnf("Stopping folder %q - path exists, but folder marker (i.e. .syncthing) missing, check for mount issues", folder.ID)
 				cfg.InvalidateFolder(id, "folder marker missing")
 				continue nextFolder
 			}

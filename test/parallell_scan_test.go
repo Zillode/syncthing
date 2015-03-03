@@ -38,8 +38,8 @@ func TestParallellScan(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	log.Println("Generaing .stignore...")
-	err = ioutil.WriteFile("s1/.stignore", []byte("some ignore data\n"), 0644)
+	log.Println("Generating .syncthing/ignores.txt...")
+	err = ioutil.WriteFile("s1/.syncthing/ignores.txt", []byte("some ignore data\n"), 0644)
 	if err != nil {
 		t.Fatal(err)
 	}

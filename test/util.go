@@ -125,9 +125,7 @@ func alterFiles(dir string) error {
 		}
 
 		switch filepath.Base(path) {
-		case ".stfolder":
-			return nil
-		case ".stversions":
+		case ".syncthing":
 			return nil
 		}
 
@@ -391,10 +389,10 @@ func startWalker(dir string, res chan<- fileInfo, abort <-chan struct{}) chan er
 		}
 
 		rn, _ := filepath.Rel(dir, path)
-		if rn == "." || rn == ".stfolder" {
+		if rn == "." {
 			return nil
 		}
-		if rn == ".stversions" {
+		if rn == ".syncthing" {
 			return filepath.SkipDir
 		}
 

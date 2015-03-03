@@ -22,6 +22,7 @@ import (
 	"io"
 	"math/rand"
 	"os"
+	"errors"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -74,6 +75,27 @@ type FolderConfiguration struct {
 
 func (f *FolderConfiguration) CreateMarker() error {
 	if !f.HasMarker() {
+		marker := filepath.Join(f.Path, ".syncthing")
+		err := os.Mkdir(marker, 0755)
+		if err != nil {
+			return err
+		}
+		osutil.HideFile(marker)
+	}
+
+	return nil
+}
+
+func (f *FolderConfiguration) HasMarker() bool {
+	_, err := os.Stat(filepath.Join(f.Path, ".syncthing"))
+	if err != nil {
+		return false
+	}
+	return true
+}
+
+func (f *FolderConfiguration) Deprecated_CreateMarker() error {
+	if !f.Deprecated_HasMarker() {
 		marker := filepath.Join(f.Path, ".stfolder")
 		fd, err := os.Create(marker)
 		if err != nil {
@@ -86,7 +108,7 @@ func (f *FolderConfiguration) CreateMarker() error {
 	return nil
 }
 
-func (f *FolderConfiguration) HasMarker() bool {
+func (f *FolderConfiguration) Deprecated_HasMarker() bool {
 	_, err := os.Stat(filepath.Join(f.Path, ".stfolder"))
 	if err != nil {
 		return false
@@ -101,6 +123,24 @@ func (f *FolderConfiguration) DeviceIDs() []protocol.DeviceID {
 		}
 	}
 	return f.deviceIDs
+}
+
+func (f *FolderConfiguration) MoveHiddenFilesV8() error {
+	// Check if we can create the folder
+	if f.HasMarker() {
+		return errors.New(".syncthing folder exists, not moving files to new format")
+	}
+	err := f.CreateMarker()
+	if err != nil { return err }
+	if !f.HasMarker() { return errors.New(".syncthing folder not found") }
+
+	// Move and clean up the existing files
+	err = os.Rename(filepath.Join(f.Path, ".stversions"), filepath.Join(f.Path, ".syncthing/versions"))
+	if err != nil { return err }
+	err = os.Rename(filepath.Join(f.Path, ".stignore"), filepath.Join(f.Path, ".syncthing/ignores.txt"))
+	if err != nil { return err }
+	err = os.Remove(filepath.Join(f.Path, ".stfolder"))
+	return err
 }
 
 type VersioningConfiguration struct {
@@ -416,6 +456,23 @@ func ChangeRequiresRestart(from, to Configuration) bool {
 	return false
 }
 
+func convertV7V8(cfg *Configuration) {
+	// Migrate .stfolder, .stversions and .stignore to the new .syncthing folder
+	// Layout:
+	//  folder_root/
+	//    .syncthing/      (hidden)
+	//        versions/    (when enabled)
+	//        ignores.txt  (normal file, no reason to hide)
+
+	for _, folder := range Wrap("", *cfg).Folders() {
+		// Best attempt, if it fails, it fails, the user will have to fix
+		// it up manually, as the repo will not get started.
+		folder.MoveHiddenFilesV8()
+	}
+
+	cfg.Version = 8
+}
+
 func convertV6V7(cfg *Configuration) {
 	// Migrate announce server addresses to the new URL based format
 	for i := range cfg.Options.GlobalAnnServers {
@@ -432,7 +489,7 @@ func convertV5V6(cfg *Configuration) {
 	for _, folder := range Wrap("", *cfg).Folders() {
 		// Best attempt, if it fails, it fails, the user will have to fix
 		// it up manually, as the repo will not get started.
-		folder.CreateMarker()
+		folder.Deprecated_CreateMarker()
 	}
 
 	cfg.Version = 6

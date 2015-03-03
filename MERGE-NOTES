@@ -1,0 +1,14 @@
+- Please check whether the alterFiles in test/utils.go is correct. Replaced code:
+                switch filepath.Base(path) {
+                case ".stfolder":
+                        return nil
+                case ".stversions":
+                        return nil
+                }
+
+- Is it possible to set the versioning dir to "folder/myversiondir" on multiple nodes, causing an endless cascading or file changes? If so, please open an extra issue.
+
+- Please update the translation strings because the string ".stversions" should be changed
+»·- gui/index.html
+»·- gui/assets/lang/*
+
