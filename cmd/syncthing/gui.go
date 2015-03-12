@@ -113,6 +113,7 @@ func startGUI(cfg config.GUIConfiguration, assetDir string, m *model.Model) erro
 	// The GET handlers
 	getRestMux := http.NewServeMux()
 	getRestMux.HandleFunc("/rest/ping", restPing)
+	getRestMux.HandleFunc("/rest/completioncalc", withModel(m, restGetCompletionCalc))
 	getRestMux.HandleFunc("/rest/completion", withModel(m, restGetCompletion))
 	getRestMux.HandleFunc("/rest/config", restGetConfig)
 	getRestMux.HandleFunc("/rest/config/sync", restGetConfigInSync)
@@ -123,6 +124,7 @@ func startGUI(cfg config.GUIConfiguration, assetDir string, m *model.Model) erro
 	getRestMux.HandleFunc("/rest/events", restGetEvents)
 	getRestMux.HandleFunc("/rest/ignores", withModel(m, restGetIgnores))
 	getRestMux.HandleFunc("/rest/lang", restGetLang)
+	getRestMux.HandleFunc("/rest/modelcalc", withModel(m, restGetModelCalc))
 	getRestMux.HandleFunc("/rest/model", withModel(m, restGetModel))
 	getRestMux.HandleFunc("/rest/need", withModel(m, restGetNeed))
 	getRestMux.HandleFunc("/rest/deviceid", restGetDeviceID)
@@ -281,6 +283,25 @@ func restGetTree(m *model.Model, w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(tree)
 }
 
+func restGetCompletionCalc(m *model.Model, w http.ResponseWriter, r *http.Request) {
+	var qs = r.URL.Query()
+	var folder = qs.Get("folder")
+	var deviceStr = qs.Get("device")
+
+	device, err := protocol.DeviceIDFromString(deviceStr)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	res := map[string]float64{
+		"completion": m.CompletionCalc(device, folder),
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(res)
+}
+
 func restGetCompletion(m *model.Model, w http.ResponseWriter, r *http.Request) {
 	var qs = r.URL.Query()
 	var folder = qs.Get("folder")
@@ -294,6 +315,40 @@ func restGetCompletion(m *model.Model, w http.ResponseWriter, r *http.Request) {
 
 	res := map[string]float64{
 		"completion": m.Completion(device, folder),
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	json.NewEncoder(w).Encode(res)
+}
+
+func restGetModelCalc(m *model.Model, w http.ResponseWriter, r *http.Request) {
+	var qs = r.URL.Query()
+	var folder = qs.Get("folder")
+	var res = make(map[string]interface{})
+
+	res["invalid"] = cfg.Folders()[folder].Invalid
+
+	globalFiles, globalDeleted, globalBytes := m.GlobalSizeCalc(folder)
+	res["globalFiles"], res["globalDeleted"], res["globalBytes"] = globalFiles, globalDeleted, globalBytes
+
+	localFiles, localDeleted, localBytes := m.LocalSizeCalc(folder)
+	res["localFiles"], res["localDeleted"], res["localBytes"] = localFiles, localDeleted, localBytes
+
+	needFiles, needBytes := m.NeedSizeCalc(folder)
+	res["needFiles"], res["needBytes"] = needFiles, needBytes
+
+	res["inSyncFiles"], res["inSyncBytes"] = globalFiles-needFiles, globalBytes-needBytes
+
+	res["state"], res["stateChanged"] = m.State(folder)
+	res["version"] = m.CurrentLocalVersion(folder) + m.RemoteLocalVersion(folder)
+
+	ignorePatterns, _, _ := m.GetIgnores(folder)
+	res["ignorePatterns"] = false
+	for _, line := range ignorePatterns {
+		if len(line) > 0 && !strings.HasPrefix(line, "//") {
+			res["ignorePatterns"] = true
+			break
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")

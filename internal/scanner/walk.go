@@ -65,16 +65,16 @@ type CurrentFiler interface {
 	CurrentFile(name string) (protocol.FileInfo, bool)
 }
 
-// Walk returns the list of files found in the local folder by scanning the
+// Walk returns the list of new files found in the local folder by scanning the
 // file system. Files are blockwise hashed.
-func (w *Walker) Walk() (chan protocol.FileInfo, error) {
+func (w *Walker) Walk() (chan protocol.FileInfo, chan int64, error) {
 	if debug {
 		l.Debugln("Walk", w.Dir, w.Sub, w.BlockSize, w.Matcher)
 	}
 
 	err := checkDir(w.Dir)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	workers := w.Hashers
@@ -83,19 +83,21 @@ func (w *Walker) Walk() (chan protocol.FileInfo, error) {
 	}
 
 	files := make(chan protocol.FileInfo)
+	bytes := make(chan int64)
 	hashedFiles := make(chan protocol.FileInfo)
 	newParallelHasher(w.Dir, w.BlockSize, workers, hashedFiles, files)
 
 	go func() {
-		hashFiles := w.walkAndHashFiles(files)
+		hashFiles := w.walkAndHashFiles(files, bytes)
 		filepath.Walk(filepath.Join(w.Dir, w.Sub), hashFiles)
+		close(bytes)
 		close(files)
 	}()
 
-	return hashedFiles, nil
+	return hashedFiles, bytes, nil
 }
 
-func (w *Walker) walkAndHashFiles(fchan chan protocol.FileInfo) filepath.WalkFunc {
+func (w *Walker) walkAndHashFiles(fchan chan protocol.FileInfo, bytes chan int64) filepath.WalkFunc {
 	now := time.Now()
 	return func(p string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -198,6 +200,7 @@ func (w *Walker) walkAndHashFiles(fchan chan protocol.FileInfo) filepath.WalkFun
 				//  - the block list (i.e. hash of target) was the same
 				cf, ok := w.CurrentFiler.CurrentFile(rn)
 				if ok && !cf.IsDeleted() && cf.IsSymlink() && !cf.IsInvalid() && SymlinkTypeEqual(flags, cf.Flags) && BlocksEqual(cf.Blocks, blocks) {
+					bytes <- cf.Size()
 					return rval
 				}
 			}
@@ -269,6 +272,7 @@ func (w *Walker) walkAndHashFiles(fchan chan protocol.FileInfo) filepath.WalkFun
 				permUnchanged := w.IgnorePerms || !cf.HasPermissionBits() || PermsEqual(cf.Flags, uint32(info.Mode()))
 				if ok && permUnchanged && !cf.IsDeleted() && cf.Modified == info.ModTime().Unix() && !cf.IsDirectory() &&
 					!cf.IsSymlink() && !cf.IsInvalid() && cf.Size() == info.Size() {
+					bytes <- cf.Size()
 					return nil
 				}
 

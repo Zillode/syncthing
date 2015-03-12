@@ -83,6 +83,14 @@ type service interface {
 	BringToFront(string)
 }
 
+type FolderSizes struct {
+	nfiles     int // TOOD ATOMIC? // TODO Why not int64?
+	deleted    int
+	globalSize int64
+	needSize   map[protocol.DeviceID]int64
+	haveSize   map[protocol.DeviceID]int64
+}
+
 type Model struct {
 	cfg             *config.Wrapper
 	db              *leveldb.DB
@@ -95,6 +103,7 @@ type Model struct {
 
 	folderCfgs     map[string]config.FolderConfiguration                  // folder -> cfg
 	folderFiles    map[string]*db.FileSet                                 // folder -> files
+	folderSizes    map[string]FolderSizes                                 // folder -> total filesizes per device
 	folderDevices  map[string][]protocol.DeviceID                         // folder -> deviceIDs
 	deviceFolders  map[protocol.DeviceID][]string                         // deviceID -> folders
 	deviceStatRefs map[protocol.DeviceID]*stats.DeviceStatisticsReference // deviceID -> statsRef
@@ -297,7 +306,7 @@ func (m *Model) FolderStatistics() map[string]stats.FolderStatistics {
 }
 
 // Returns the completion status, in percent, for the given device and folder.
-func (m *Model) Completion(device protocol.DeviceID, folder string) float64 {
+func (m *Model) CompletionCalc(device protocol.DeviceID, folder string) float64 {
 	var tot int64
 
 	m.fmut.RLock()
@@ -328,7 +337,7 @@ func (m *Model) Completion(device protocol.DeviceID, folder string) float64 {
 
 	res := 100 * (1 - float64(need)/float64(tot))
 	if debug {
-		l.Debugf("%v Completion(%s, %q): %f (%d / %d)", m, device, folder, res, need, tot)
+		l.Debugf("%v CompletionCalc(%s, %q): %f (%d / %d)", m, device, folder, res, need, tot)
 	}
 
 	return res
@@ -344,6 +353,36 @@ func sizeOf(fs []protocol.FileInfo) (files, deleted int, bytes int64) {
 	return
 }
 
+// Returns the completion status, in percent, for the given device and folder.
+// Uses cached folder size unless this is not available yet (falls back to Completion()).
+func (m *Model) Completion(device protocol.DeviceID, folder string) float64 {
+	m.fmut.RLock()
+	fs, ok := m.folderSizes[folder] // @calmh/@jmr: is this by copy or by ref? (I guess copy)
+	m.fmut.RUnlock()
+	if !ok {
+		// We don't have the folder size (yet), fall back to calculation
+		l.Debugf("%v Completion(%s, %q) folder size not ready", m, device, folder)
+		return m.CompletionCalc(device, folder)
+	}
+	tot := fs.globalSize
+	if tot == 0 {
+		return 100 // Folder is empty, so we have all of it
+	}
+
+	need, ok := fs.needSize[device]
+	if !ok {
+		// Missing need count, fall back to calculation
+		l.Debugf("%v Completion(%s, %q) need size not ready", m, device, folder)
+		return m.CompletionCalc(device, folder)
+	}
+	res := 100 * (1 - float64(need)/float64(tot))
+	if debug {
+		l.Debugf("%v Completion(%s, %q): %f (%d / %d)", m, device, folder, res, need, tot)
+	}
+
+	return res
+}
+
 func sizeOfFile(f db.FileIntf) (files, deleted int, bytes int64) {
 	if !f.IsDeleted() {
 		files++
@@ -356,7 +395,7 @@ func sizeOfFile(f db.FileIntf) (files, deleted int, bytes int64) {
 
 // GlobalSize returns the number of files, deleted files and total bytes for all
 // files in the global model.
-func (m *Model) GlobalSize(folder string) (nfiles, deleted int, bytes int64) {
+func (m *Model) GlobalSizeCalc(folder string) (nfiles, deleted int, bytes int64) {
 	m.fmut.RLock()
 	defer m.fmut.RUnlock()
 	if rf, ok := m.folderFiles[folder]; ok {
@@ -371,9 +410,22 @@ func (m *Model) GlobalSize(folder string) (nfiles, deleted int, bytes int64) {
 	return
 }
 
-// LocalSize returns the number of files, deleted files and total bytes for all
+// Returns the number of files, deleted files and total bytes for all
+// files in the global model using cached sizes.
+// Uses cached folder size unless this is not available yet.
+func (m *Model) GlobalSize(folder string) (nfiles, deleted int, bytes int64) {
+	m.fmut.RLock()
+	fs, ok := m.folderSizes[folder] // @calmh/@jmr: is this by copy or by ref? (I guess copy)
+	if !ok {
+		return m.GlobalSizeCalc(folder)
+	}
+	m.fmut.RUnlock()
+	return fs.nfiles, fs.deleted, fs.globalSize
+}
+
+// LocalSizeCalc returns the number of files, deleted files and total bytes for all
 // files in the local folder.
-func (m *Model) LocalSize(folder string) (nfiles, deleted int, bytes int64) {
+func (m *Model) LocalSizeCalc(folder string) (nfiles, deleted int, bytes int64) {
 	m.fmut.RLock()
 	defer m.fmut.RUnlock()
 	if rf, ok := m.folderFiles[folder]; ok {
@@ -391,8 +443,25 @@ func (m *Model) LocalSize(folder string) (nfiles, deleted int, bytes int64) {
 	return
 }
 
+// LocalSize returns the number of files, deleted files and total bytes for all
+// files in the local folder.
+// Uses cached folder size unless this is not available yet.
+func (m *Model) LocalSize(folder string) (nfiles, deleted int, bytes int64) {
+	m.fmut.RLock()
+	fs, ok := m.folderSizes[folder] // @calmh/@jmr: is this by copy or by ref? (I guess copy)
+	if !ok {
+		return m.LocalSizeCalc(folder)
+	}
+	localSize, ok := fs.haveSize[protocol.LocalDeviceID]
+	if !ok {
+		return m.LocalSizeCalc(folder)
+	}
+	m.fmut.RUnlock()
+	return fs.nfiles, fs.deleted, localSize
+}
+
 // NeedSize returns the number and total size of currently needed files.
-func (m *Model) NeedSize(folder string) (nfiles int, bytes int64) {
+func (m *Model) NeedSizeCalc(folder string) (nfiles int, bytes int64) {
 	m.fmut.RLock()
 	defer m.fmut.RUnlock()
 	if rf, ok := m.folderFiles[folder]; ok {
@@ -404,6 +473,28 @@ func (m *Model) NeedSize(folder string) (nfiles int, bytes int64) {
 		})
 	}
 	bytes -= m.progressEmitter.BytesCompleted(folder)
+	if debug {
+		l.Debugf("%v NeedSizeCalc(%q): %d %d", m, folder, nfiles, bytes)
+	}
+	return
+}
+
+// NeedSize returns the number and total size of currently needed files.
+// Uses cached folder size unless this is not available yet.
+func (m *Model) NeedSize(folder string) (nfiles int, bytes int64) {
+	device := protocol.LocalDeviceID
+	m.fmut.RLock()
+	fs, ok := m.folderSizes[folder] // @calmh/@jmr: is this by copy or by ref? (I guess copy)
+	m.fmut.RUnlock()
+	need, ok := fs.needSize[device]
+	if !ok {
+		// Missing need count, fall back to calculation
+		l.Debugf("%v NeedSize(%s, %q) need size not ready", m, device, folder)
+		return m.NeedSizeCalc(folder)
+	}
+
+	nfiles = fs.nfiles + fs.deleted
+	bytes = need - m.progressEmitter.BytesCompleted(folder)
 	if debug {
 		l.Debugf("%v NeedSize(%q): %d %d", m, folder, nfiles, bytes)
 	}
@@ -1175,11 +1266,17 @@ func (m *Model) ScanFolderSub(folder, sub string) error {
 	}
 
 	m.setState(folder, FolderScanning)
-	fchan, err := w.Walk()
+	fchan, byteschan, err := w.Walk()
 
 	if err != nil {
 		return err
 	}
+	var bytes int64
+	println("Bs")
+	for size := range byteschan {
+		bytes += size
+	}
+	println("Bsdone")
 	batchSize := 100
 	batch := make([]protocol.FileInfo, 0, batchSize)
 	for f := range fchan {
