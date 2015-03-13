@@ -115,7 +115,9 @@ func (s *FileSet) ReplaceWithDelete(device protocol.DeviceID, fs []protocol.File
 	}
 }
 
-func (s *FileSet) Update(device protocol.DeviceID, fs []protocol.FileInfo) {
+// Returns the difference in bytes
+func (s *FileSet) Update(device protocol.DeviceID, fs []protocol.FileInfo) int64 {
+	bytes := int64(0)
 	if debug {
 		l.Debugf("%s Update(%v, [%d])", s.folder, device, len(fs))
 	}
@@ -130,6 +132,8 @@ func (s *FileSet) Update(device protocol.DeviceID, fs []protocol.FileInfo) {
 			if !ok || existingFile.Version <= newFile.Version {
 				discards = append(discards, existingFile)
 				updates = append(updates, newFile)
+				bytes -= existingFile.Size()
+				bytes += newFile.Size()
 			}
 		}
 		s.blockmap.Discard(discards)
@@ -138,6 +142,7 @@ func (s *FileSet) Update(device protocol.DeviceID, fs []protocol.FileInfo) {
 	if lv := ldbUpdate(s.db, []byte(s.folder), device[:], fs); lv > s.localVersion[device] {
 		s.localVersion[device] = lv
 	}
+	return bytes
 }
 
 func (s *FileSet) WithNeed(device protocol.DeviceID, fn Iterator) {

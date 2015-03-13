@@ -44,7 +44,7 @@ func reportData(m *model.Model) map[string]interface{} {
 	res["numFolders"] = len(cfg.Folders())
 	res["numDevices"] = len(cfg.Devices())
 
-	var totFiles, maxFiles int
+	var totFiles, maxFiles int64
 	var totBytes, maxBytes int64
 	for folderID := range cfg.Folders() {
 		files, _, bytes := m.GlobalSize(folderID)

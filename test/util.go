@@ -48,6 +48,7 @@ const (
 )
 
 func generateFiles(dir string, files, maxexp int, srcname string) error {
+	maxexp = maxexp / 10
 	fd, err := os.Open(srcname)
 	if err != nil {
 		return err
