@@ -92,10 +92,21 @@ type FolderSize struct {
 	needSize   map[protocol.DeviceID]*int64
 }
 
-func NewFolderSize() *FolderSize {
+func NewFolderSize(FileSet *fs) *FolderSize {
 	nfiles := int64(0)
 	deleted := int64(0)
 	globalSize := int64(0)
+	for fi := range fs {
+		if fi.IsInvalid() {
+			return
+		}
+		if fi.IsDeleted() {
+			deleted += 1
+			return
+		}
+		nfiles += 1
+		globalSize += fi.Size()
+	}
 	return &FolderSize{
 		nfiles:     &nfiles,
 		deleted:    &deleted,
@@ -1287,7 +1298,7 @@ func (m *Model) AddFolder(cfg config.FolderConfiguration) {
 	m.fmut.Lock()
 	m.folderCfgs[cfg.ID] = cfg
 	m.folderFiles[cfg.ID] = db.NewFileSet(cfg.ID, m.db)
-	m.folderSize[cfg.ID] = NewFolderSize()
+	m.folderSize[cfg.ID] = NewFolderSize(m.folderFiles[cfg.ID])
 
 	m.folderDevices[cfg.ID] = make([]protocol.DeviceID, len(cfg.Devices))
 	for i, device := range cfg.Devices {
@@ -1372,11 +1383,14 @@ func (m *Model) ScanFolderSub(folder, sub string) error {
 	if err != nil {
 		return err
 	}
+	nfiles := int64(0) // Track of updated local number of files
+	bytes := int64(0)  // Track of updated local bytesize
 	batchSize := 100
-	bytes := int64(0)
 	batch := make([]protocol.FileInfo, 0, batchSize)
 	// Newly hashed files
 	for f := range fchan {
+		nfiles += 1 // TODO are folder file items?
+		bytes := f.Size()
 		events.Default.Log(events.LocalIndexUpdated, map[string]interface{}{
 			"folder":   folder,
 			"name":     f.Name,
@@ -1385,19 +1399,17 @@ func (m *Model) ScanFolderSub(folder, sub string) error {
 			"size":     f.Size(),
 		})
 		if len(batch) == batchSize {
-			bytes += fs.Update(protocol.LocalDeviceID, batch)
+			fs.Update(protocol.LocalDeviceID, batch)
 			batch = batch[:0]
-			m.AddHaveSize(folder, protocol.LocalDeviceID, bytes)
 		}
 		batch = append(batch, f)
 	}
 	if len(batch) > 0 {
-		bytes += fs.Update(protocol.LocalDeviceID, batch)
-		m.AddHaveSize(folder, protocol.LocalDeviceID, bytes)
+		fs.Update(protocol.LocalDeviceID, batch)
 	}
 	batch = batch[:0]
-	// LO bytes := atomic.LoadInt64(pBytes)
-	// LO m.AddHaveSize(folder, protocol.LocalDeviceID, bytes)
+	// LODE bytes := atomic.LoadInt64(pBytes)
+	// LODE m.AddHaveSize(folder, protocol.LocalDeviceID, bytes)
 	// TODO: We should limit the Have scanning to start at sub
 	seenPrefix := false
 	fs.WithHaveTruncated(protocol.LocalDeviceID, func(fi db.FileIntf) bool {
@@ -1416,7 +1428,7 @@ func (m *Model) ScanFolderSub(folder, sub string) error {
 			}
 
 			if len(batch) == batchSize {
-				bytes += fs.Update(protocol.LocalDeviceID, batch)
+				fs.Update(protocol.LocalDeviceID, batch)
 				batch = batch[:0]
 			}
 
@@ -1425,7 +1437,8 @@ func (m *Model) ScanFolderSub(folder, sub string) error {
 				if debug {
 					l.Debugln("setting invalid bit on ignored", f)
 				}
-				// TODO deleted
+				nfiles -= 1
+				bytes -= f.Size()
 				nf := protocol.FileInfo{
 					Name:     f.Name,
 					Flags:    f.Flags | protocol.FlagInvalid,
@@ -1450,6 +1463,8 @@ func (m *Model) ScanFolderSub(folder, sub string) error {
 				// file) are deleted but will return a confusing error ("not a
 				// directory") when we try to Lstat() them.
 
+				nfiles -= 1
+				bytes -= f.Size()
 				nf := protocol.FileInfo{
 					Name:     f.Name,
 					Flags:    f.Flags | protocol.FlagDeleted,
@@ -1463,17 +1478,16 @@ func (m *Model) ScanFolderSub(folder, sub string) error {
 					"flags":    fmt.Sprintf("0%o", f.Flags),
 					"size":     f.Size(),
 				})
-				// TODO deleted
 				batch = append(batch, nf)
 			}
 		}
 		return true
 	})
 	if len(batch) > 0 {
-		bytes += fs.Update(protocol.LocalDeviceID, batch)
+		fs.Update(protocol.LocalDeviceID, batch)
 	}
 
-	m.AddHaveSize(folder, protocol.LocalDeviceID, bytes)
+	m.AddHaveSize(folder, protocol.LocalDeviceID, nfiles, bytes)
 	m.setState(folder, FolderIdle)
 	return nil
 }
