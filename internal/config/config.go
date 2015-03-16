@@ -26,6 +26,7 @@ import (
 	"reflect"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/calmh/logger"
 	"github.com/syncthing/protocol"
@@ -35,7 +36,7 @@ import (
 
 var l = logger.DefaultLogger
 
-const CurrentVersion = 7
+const CurrentVersion = 9
 
 type Configuration struct {
 	Version        int                   `xml:"version,attr"`
@@ -145,12 +146,12 @@ func (c *VersioningConfiguration) UnmarshalXML(d *xml.Decoder, start xml.StartEl
 }
 
 type DeviceConfiguration struct {
-	DeviceID    protocol.DeviceID `xml:"id,attr"`
-	Name        string            `xml:"name,attr,omitempty"`
-	Addresses   []string          `xml:"address,omitempty"`
-	Compression bool              `xml:"compression,attr"`
-	CertName    string            `xml:"certName,attr,omitempty"`
-	Introducer  bool              `xml:"introducer,attr"`
+	DeviceID    protocol.DeviceID    `xml:"id,attr"`
+	Name        string               `xml:"name,attr,omitempty"`
+	Addresses   []string             `xml:"address,omitempty"`
+	Compression protocol.Compression `xml:"compression,attr"`
+	CertName    string               `xml:"certName,attr,omitempty"`
+	Introducer  bool                 `xml:"introducer,attr"`
 }
 
 type FolderDeviceConfiguration struct {
@@ -162,7 +163,7 @@ type FolderDeviceConfiguration struct {
 
 type OptionsConfiguration struct {
 	ListenAddress           []string `xml:"listenAddress" default:"0.0.0.0:22000"`
-	GlobalAnnServers        []string `xml:"globalAnnounceServer" default:"udp4://announce.syncthing.net:22026"`
+	GlobalAnnServers        []string `xml:"globalAnnounceServer" default:"udp4://announce.syncthing.net:22026, udp6://announce-v6.syncthing.net:22026"`
 	GlobalAnnEnabled        bool     `xml:"globalAnnounceEnabled" default:"true"`
 	LocalAnnEnabled         bool     `xml:"localAnnounceEnabled" default:"true"`
 	LocalAnnPort            int      `xml:"localAnnouncePort" default:"21025"`
@@ -182,6 +183,7 @@ type OptionsConfiguration struct {
 	CacheIgnoredFiles       bool     `xml:"cacheIgnoredFiles" default:"true"`
 	ProgressUpdateIntervalS int      `xml:"progressUpdateIntervalS" default:"5"`
 	SymlinksEnabled         bool     `xml:"symlinksEnabled" default:"true"`
+	LimitBandwidthInLan     bool     `xml:"limitBandwidthInLan" default:"false"`
 
 	Deprecated_RescanIntervalS int    `xml:"rescanIntervalS,omitempty" json:"-"`
 	Deprecated_UREnabled       bool   `xml:"urEnabled,omitempty" json:"-"`
@@ -296,34 +298,30 @@ func (cfg *Configuration) prepare(myID protocol.DeviceID) {
 	cfg.Options.Deprecated_URDeclined = false
 	cfg.Options.Deprecated_UREnabled = false
 
-	// Upgrade to v1 configuration if appropriate
+	// Upgrade configuration versions as appropriate
 	if cfg.Version == 1 {
 		convertV1V2(cfg)
 	}
-
-	// Upgrade to v3 configuration if appropriate
 	if cfg.Version == 2 {
 		convertV2V3(cfg)
 	}
-
-	// Upgrade to v4 configuration if appropriate
 	if cfg.Version == 3 {
 		convertV3V4(cfg)
 	}
-
-	// Upgrade to v5 configuration if appropriate
 	if cfg.Version == 4 {
 		convertV4V5(cfg)
 	}
-
-	// Upgrade to v6 configuration if appropriate
 	if cfg.Version == 5 {
 		convertV5V6(cfg)
 	}
-
-	// Upgrade to v7 configuration if appropriate
 	if cfg.Version == 6 {
 		convertV6V7(cfg)
+	}
+	if cfg.Version == 7 {
+		convertV7V8(cfg)
+	}
+	if cfg.Version == 8 {
+		convertV8V9(cfg)
 	}
 
 	// Hash old cleartext passwords
@@ -416,6 +414,22 @@ func ChangeRequiresRestart(from, to Configuration) bool {
 	return false
 }
 
+func convertV8V9(cfg *Configuration) {
+	// Compression is interpreted and serialized differently, but no enforced
+	// changes. Still need a new version number since the compression stuff
+	// isn't understandable by earlier versions.
+	cfg.Version = 9
+}
+
+func convertV7V8(cfg *Configuration) {
+	// Add IPv6 announce server
+	if len(cfg.Options.GlobalAnnServers) == 1 && cfg.Options.GlobalAnnServers[0] == "udp4://announce.syncthing.net:22026" {
+		cfg.Options.GlobalAnnServers = append(cfg.Options.GlobalAnnServers, "udp6://announce-v6.syncthing.net:22026")
+	}
+
+	cfg.Version = 8
+}
+
 func convertV6V7(cfg *Configuration) {
 	// Migrate announce server addresses to the new URL based format
 	for i := range cfg.Options.GlobalAnnServers {
@@ -494,7 +508,7 @@ func convertV2V3(cfg *Configuration) {
 	// compression on all existing new. New devices will get compression on by
 	// default by the GUI.
 	for i := range cfg.Deprecated_Nodes {
-		cfg.Deprecated_Nodes[i].Compression = true
+		cfg.Deprecated_Nodes[i].Compression = protocol.CompressMetadata
 	}
 
 	// The global discovery format and port number changed in v0.9. Having the
@@ -594,8 +608,16 @@ func fillNilSlices(data interface{}) error {
 			switch f.Interface().(type) {
 			case []string:
 				if f.IsNil() {
-					rv := reflect.MakeSlice(reflect.TypeOf([]string{}), 1, 1)
-					rv.Index(0).SetString(v)
+					// Treat the default as a comma separated slice
+					vs := strings.Split(v, ",")
+					for i := range vs {
+						vs[i] = strings.TrimSpace(vs[i])
+					}
+
+					rv := reflect.MakeSlice(reflect.TypeOf([]string{}), len(vs), len(vs))
+					for i, v := range vs {
+						rv.Index(i).SetString(v)
+					}
 					f.Set(rv)
 				}
 			}
@@ -614,6 +636,8 @@ func uniqueStrings(ss []string) []string {
 	for k := range m {
 		us = append(us, k)
 	}
+
+	sort.Strings(us)
 
 	return us
 }

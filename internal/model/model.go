@@ -991,6 +991,7 @@ func (m *Model) Request(deviceID protocol.DeviceID, folder, name string, offset 
 func (m *Model) ReplaceLocal(folder string, fs []protocol.FileInfo) {
 	m.fmut.RLock()
 	m.folderFiles[folder].ReplaceWithDelete(protocol.LocalDeviceID, fs)
+	// TODO Here?
 	m.fmut.RUnlock()
 }
 
@@ -1259,9 +1260,15 @@ func sendIndexTo(initial bool, minLocalVer int64, conn protocol.Connection, fold
 func (m *Model) updateLocal(folder string, f protocol.FileInfo) {
 	f.LocalVersion = 0
 	m.fmut.RLock()
-	bytes := m.folderFiles[folder].Update(protocol.LocalDeviceID, []protocol.FileInfo{f})
+	m.folderFiles[folder].Update(protocol.LocalDeviceID, []protocol.FileInfo{f})
 	m.fmut.RUnlock()
-	m.AddHaveSize(folder, protocol.LocalDeviceID, bytes)
+	if !f.IsInvalid() {
+		if f.IsDelete() {
+			m.AddHaveSize(folder, protocol.LocalDeviceID, -f.Size())
+		} else {
+			m.AddHaveSize(folder, protocol.LocalDeviceID, f.Size())
+		}
+	}
 	events.Default.Log(events.LocalIndexUpdated, map[string]interface{}{
 		"folder":   folder,
 		"name":     f.Name,
@@ -1349,6 +1356,7 @@ func (m *Model) ScanFolder(folder string) error {
 }
 
 func (m *Model) ScanFolderSub(folder, sub string) error {
+	sub = osutil.NativeFilename(sub)
 	if p := filepath.Clean(filepath.Join(folder, sub)); !strings.HasPrefix(p, folder) {
 		return errors.New("invalid subpath")
 	}
@@ -1364,6 +1372,18 @@ func (m *Model) ScanFolderSub(folder, sub string) error {
 	}
 
 	_ = ignores.Load(filepath.Join(folderCfg.Path, ".stignore")) // Ignore error, there might not be an .stignore
+
+	// Required to make sure that we start indexing at a directory we're already
+	// aware off.
+	for sub != "" {
+		if _, ok = fs.Get(protocol.LocalDeviceID, sub); ok {
+			break
+		}
+		sub = filepath.Dir(sub)
+		if sub == "." || sub == string(filepath.Separator) {
+			sub = ""
+		}
+	}
 
 	w := &scanner.Walker{
 		Dir:          folderCfg.Path,

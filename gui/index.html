@@ -319,7 +319,7 @@
                       <span ng-if="announceServersFailed.length == 0" class="data text-success">
                         <span>OK</span>
                       </span>
-                      <span ng-if="announceServersFailed.length != 0" class="data text-danger">
+                      <span ng-if="announceServersFailed.length != 0" class="data" ng-class="{'text-danger': announceServersFailed.length == announceServersTotal}">
                         <span popover data-trigger="hover" data-placement="bottom" data-content="{{announceServersFailed.join('\n')}}">
                           {{announceServersTotal-announceServersFailed.length}}/{{announceServersTotal}}
                         </span>
@@ -370,9 +370,12 @@
                       <th><span class="glyphicon glyphicon-link"></span>&emsp;<span translate>Address</span></th>
                       <td class="text-right">{{deviceAddr(deviceCfg)}}</td>
                     </tr>
-                    <tr ng-if="!deviceCfg.Compression">
-                      <th><span class="glyphicon glyphicon-compressed"></span>&emsp;<span translate>Use Compression</span></th>
-                      <td translate class="text-right">No</td>
+                    <tr ng-if="deviceCfg.Compression != 'metadata'">
+                      <th><span class="glyphicon glyphicon-compressed"></span>&emsp;<span translate>Compression</span></th>
+                      <td class="text-right">
+                        <span ng-if="deviceCfg.Compression == 'always'" translate>All Data</span>
+                        <span ng-if="deviceCfg.Compression == 'never'" translate>Off</span>
+                      </td>
                     </tr>
                     <tr ng-if="deviceCfg.Introducer">
                       <th><span class="glyphicon glyphicon-thumbs-up"></span>&emsp;<span translate>Introducer</span></th>
@@ -502,12 +505,12 @@
               <p translate class="help-block">Enter comma separated "ip:port" addresses or "dynamic" to perform automatic discovery of the address.</p>
             </div>
             <div ng-if="!editingSelf" class="form-group">
-              <div class="checkbox">
-                <label>
-                  <input type="checkbox" ng-model="currentDevice.Compression"> <span translate>Use Compression</span>
-                </label>
-                <p translate class="help-block">Compression is recommended in most setups.</p>
-              </div>
+              <label translate>Compression</label>
+              <select class="form-control" ng-model="currentDevice.Compression">
+                <option value="always" translate>All Data</option>
+                <option value="metadata" translate>Metadata Only</option>
+                <option value="never" translate>Off</option>
+              </select>
             </div>
             <div ng-if="!editingSelf" class="form-group">
               <div class="checkbox">
@@ -942,12 +945,14 @@
           <li>Alexander Graf</li>
           <li>Arthur Axel fREW Schmidt</li>
           <li>Audrius Butkevicius</li>
+          <li>Ben Curthoys</li>
           <li>Ben Schulz</li>
           <li>Ben Sidhom</li>
           <li>Brandon Philips</li>
           <li>Brendan Long</li>
           <li>Caleb Callaway</li>
           <li>Cathryne Linenweaver</li>
+          <li>Colin Kennedy</li>
           <li>Chris Joel</li>
           <li>Daniel Martí</li>
           <li>Dennis Wilson</li>
@@ -960,12 +965,15 @@
           <li>James Patterson</li>
           <li>Jens Diemer</li>
           <li>Jochen Voss</li>
+          <li>Kamada Ken'ichi</li>
           <li>Karol Różycki</li>
           <li>Lode Hoste</li>
           <li>Marc Laporte</li>
+          <li>Marc Pujol</li>
           <li>Marcin Dziadus</li>
           <li>Michael Jephcote</li>
           <li>Michael Tilli</li>
+          <li>Pascal Jungblut</li>
           <li>Peter Hoeg</li>
           <li>Philippe Schommers</li>
           <li>Phill Luby</li>

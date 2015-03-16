@@ -350,16 +350,43 @@ func rmr(paths ...string) {
 	}
 }
 
-func getVersion() string {
+func getReleaseVersion() (string, error) {
+	fd, err := os.Open("RELEASE")
+	if err != nil {
+		return "", err
+	}
+	defer fd.Close()
+
+	bs, err := ioutil.ReadAll(fd)
+	if err != nil {
+		return "", err
+	}
+	return string(bytes.TrimSpace(bs)), nil
+}
+
+func getGitVersion() (string, error) {
 	v, err := runError("git", "describe", "--always", "--dirty")
 	if err != nil {
-		return "unknown-dev"
+		return "", err
 	}
 	v = versionRe.ReplaceAllFunc(v, func(s []byte) []byte {
 		s[0] = '+'
 		return s
 	})
-	return string(v)
+	return string(v), nil
+}
+
+func getVersion() string {
+	// First try for a RELEASE file,
+	if ver, err := getReleaseVersion(); err == nil {
+		return ver
+	}
+	// ... then see if we have a Git tag.
+	if ver, err := getGitVersion(); err == nil {
+		return ver
+	}
+	// This seems to be a dev build.
+	return "unknown-dev"
 }
 
 func buildStamp() int64 {

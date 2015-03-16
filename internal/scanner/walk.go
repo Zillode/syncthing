@@ -31,6 +31,21 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
+var maskModePerm os.FileMode
+
+func init() {
+	if runtime.GOOS == "windows" {
+		// There is no user/group/others in Windows' read-only
+		// attribute, and all "w" bits are set in os.FileInfo
+		// if the file is not read-only.  Do not send these
+		// group/others-writable bits to other devices in order to
+		// avoid unexpected world-writable files on other platforms.
+		maskModePerm = os.ModePerm & 0755
+	} else {
+		maskModePerm = os.ModePerm
+	}
+}
+
 type Walker struct {
 	// Dir is the base directory for the walk
 	Dir string
@@ -242,7 +257,7 @@ func (w *Walker) walkAndHashFiles(fchan chan protocol.FileInfo, bytes *int64) fi
 			if w.IgnorePerms {
 				flags |= protocol.FlagNoPermBits | 0777
 			} else {
-				flags |= uint32(info.Mode() & os.ModePerm)
+				flags |= uint32(info.Mode() & maskModePerm)
 			}
 			f := protocol.FileInfo{
 				Name:     rn,
@@ -281,7 +296,7 @@ func (w *Walker) walkAndHashFiles(fchan chan protocol.FileInfo, bytes *int64) fi
 				}
 			}
 
-			var flags = uint32(info.Mode() & os.ModePerm)
+			var flags = uint32(info.Mode() & maskModePerm)
 			if w.IgnorePerms {
 				flags = protocol.FlagNoPermBits | 0666
 			}

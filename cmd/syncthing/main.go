@@ -115,6 +115,7 @@ var (
 	externalPort   int
 	igd            *upnp.IGD
 	cert           tls.Certificate
+	lans           []*net.IPNet
 )
 
 const (
@@ -492,6 +493,10 @@ func syncthingMain() {
 	}
 	if opts.MaxRecvKbps > 0 {
 		readRateLimit = ratelimit.NewBucketWithRate(float64(1000*opts.MaxRecvKbps), int64(5*1000*opts.MaxRecvKbps))
+	}
+
+	if opts.MaxRecvKbps > 0 || opts.MaxSendKbps > 0 {
+		lans, _ = osutil.GetLans()
 	}
 
 	dbFile := filepath.Join(confDir, "index")
@@ -943,7 +948,10 @@ func ensureDir(dir string, mode int) {
 func getDefaultConfDir() (string, error) {
 	switch runtime.GOOS {
 	case "windows":
-		return filepath.Join(os.Getenv("LocalAppData"), "Syncthing"), nil
+		if p := os.Getenv("LocalAppData"); p != "" {
+			return filepath.Join(p, "Syncthing"), nil
+		}
+		return filepath.Join(os.Getenv("AppData"), "Syncthing"), nil
 
 	case "darwin":
 		return osutil.ExpandTilde("~/Library/Application Support/Syncthing")
