@@ -25,6 +25,7 @@ import (
 	"sync"
 
 	"github.com/syncthing/protocol"
+	"github.com/syncthing/syncthing/internal/cache"
 	"github.com/syncthing/syncthing/internal/lamport"
 	"github.com/syncthing/syncthing/internal/osutil"
 	"github.com/syndtr/goleveldb/leveldb"
@@ -32,6 +33,7 @@ import (
 
 type FileSet struct {
 	localVersion map[protocol.DeviceID]int64
+	cachedSize   *cache.FolderSize
 	mutex        sync.Mutex
 	folder       string
 	db           *leveldb.DB
@@ -57,6 +59,7 @@ type Iterator func(f FileIntf) bool
 func NewFileSet(folder string, db *leveldb.DB) *FileSet {
 	var s = FileSet{
 		localVersion: make(map[protocol.DeviceID]int64),
+		cachedSize:   cache.NewFolderSize(folder),
 		folder:       folder,
 		db:           db,
 		blockmap:     NewBlockMap(db, folder),
@@ -69,6 +72,9 @@ func NewFileSet(folder string, db *leveldb.DB) *FileSet {
 		copy(deviceID[:], device)
 		if f.LocalVersion > s.localVersion[deviceID] {
 			s.localVersion[deviceID] = f.LocalVersion
+		}
+		if !f.IsInvalid() {
+			s.cachedSize.AddHave(deviceID, 1, f.Size())
 		}
 		lamport.Default.Tick(f.Version)
 		return true
@@ -88,7 +94,7 @@ func (s *FileSet) Replace(device protocol.DeviceID, fs []protocol.FileInfo) {
 	normalizeFilenames(fs)
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	s.localVersion[device] = ldbReplace(s.db, []byte(s.folder), device[:], fs)
+	s.localVersion[device] = ldbReplace(s.db, []byte(s.folder), device[:], s.cachedSize, fs)
 	if len(fs) == 0 {
 		// Reset the local version if all files were removed.
 		s.localVersion[device] = 0
@@ -106,7 +112,7 @@ func (s *FileSet) ReplaceWithDelete(device protocol.DeviceID, fs []protocol.File
 	normalizeFilenames(fs)
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
-	if lv := ldbReplaceWithDelete(s.db, []byte(s.folder), device[:], fs); lv > s.localVersion[device] {
+	if lv := ldbReplaceWithDelete(s.db, []byte(s.folder), device[:], s.cachedSize, fs); lv > s.localVersion[device] {
 		s.localVersion[device] = lv
 	}
 	if device == protocol.LocalDeviceID {
@@ -116,7 +122,8 @@ func (s *FileSet) ReplaceWithDelete(device protocol.DeviceID, fs []protocol.File
 }
 
 // Returns the difference in bytes
-func (s *FileSet) Update(device protocol.DeviceID, fs []protocol.FileInfo) int64 {
+func (s *FileSet) Update(device protocol.DeviceID, fs []protocol.FileInfo) (int64, int64) {
+	nfiles := int64(0)
 	bytes := int64(0)
 	if debug {
 		l.Debugf("%s Update(%v, [%d])", s.folder, device, len(fs))
@@ -129,6 +136,9 @@ func (s *FileSet) Update(device protocol.DeviceID, fs []protocol.FileInfo) int64
 		updates := make([]protocol.FileInfo, 0, len(fs))
 		for _, newFile := range fs {
 			existingFile, ok := ldbGet(s.db, []byte(s.folder), device[:], []byte(newFile.Name))
+			if !ok {
+				nfiles += 1
+			}
 			if !ok || existingFile.Version <= newFile.Version {
 				discards = append(discards, existingFile)
 				updates = append(updates, newFile)
@@ -139,10 +149,10 @@ func (s *FileSet) Update(device protocol.DeviceID, fs []protocol.FileInfo) int64
 		s.blockmap.Discard(discards)
 		s.blockmap.Update(updates)
 	}
-	if lv := ldbUpdate(s.db, []byte(s.folder), device[:], fs); lv > s.localVersion[device] {
+	if lv := ldbUpdate(s.db, []byte(s.folder), device[:], s.cachedSize, fs); lv > s.localVersion[device] {
 		s.localVersion[device] = lv
 	}
-	return bytes
+	return nfiles, bytes
 }
 
 func (s *FileSet) WithNeed(device protocol.DeviceID, fn Iterator) {
@@ -265,4 +275,25 @@ func nativeFileIterator(fn Iterator) Iterator {
 			panic("unknown interface type")
 		}
 	}
+}
+
+func (s *FileSet) GetCachedHaveSize(device protocol.DeviceID) (int64, int64) {
+	if debug {
+		l.Debugf("%s GetCachedHaveSize(%v)", s.folder, device)
+	}
+	return s.cachedSize.GetHave(device)
+}
+
+func (s *FileSet) GetCachedGlobalSize() (int64, int64) {
+	if debug {
+		l.Debugf("%s GetCachedGlobalSize()", s.folder)
+	}
+	return s.cachedSize.GetGlobal()
+}
+
+func (s *FileSet) GetCachedNeedSize(device protocol.DeviceID) (int64, int64) {
+	if debug {
+		l.Debugf("%s GetCachedNeedSize(%v)", s.folder, device)
+	}
+	return s.cachedSize.GetHave(device)
 }

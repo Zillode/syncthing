@@ -82,15 +82,16 @@ type CurrentFiler interface {
 }
 
 // Walk returns the list of new files found in the local folder by scanning the
-// file system. It also returns the total bytesize of all files. Files are blockwise hashed.
-func (w *Walker) Walk() (chan protocol.FileInfo, *int64, error) {
+// file system. It also returns the number of files and the total bytesize.
+// Files are blockwise hashed.
+func (w *Walker) Walk() (chan protocol.FileInfo, *int64, *int64, error) {
 	if debug {
 		l.Debugln("Walk", w.Dir, w.Sub, w.BlockSize, w.Matcher)
 	}
 
 	err := checkDir(w.Dir)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	workers := w.Hashers
@@ -98,21 +99,22 @@ func (w *Walker) Walk() (chan protocol.FileInfo, *int64, error) {
 		workers = runtime.NumCPU()
 	}
 
+	var nfiles int64 = 0
 	var bytes int64 = 0
 	files := make(chan protocol.FileInfo)
 	hashedFiles := make(chan protocol.FileInfo)
 	newParallelHasher(w.Dir, w.BlockSize, workers, hashedFiles, files)
 
 	go func() {
-		hashFiles := w.walkAndHashFiles(files, &bytes)
+		hashFiles := w.walkAndHashFiles(files, &nfiles, &bytes)
 		filepath.Walk(filepath.Join(w.Dir, w.Sub), hashFiles)
 		close(files)
 	}()
 
-	return hashedFiles, &bytes, nil
+	return hashedFiles, &nfiles, &bytes, nil
 }
 
-func (w *Walker) walkAndHashFiles(fchan chan protocol.FileInfo, bytes *int64) filepath.WalkFunc {
+func (w *Walker) walkAndHashFiles(fchan chan protocol.FileInfo, nfiles *int64, bytes *int64) filepath.WalkFunc {
 	now := time.Now()
 	return func(p string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -215,6 +217,7 @@ func (w *Walker) walkAndHashFiles(fchan chan protocol.FileInfo, bytes *int64) fi
 				//  - the block list (i.e. hash of target) was the same
 				cf, ok := w.CurrentFiler.CurrentFile(rn)
 				if ok && !cf.IsDeleted() && cf.IsSymlink() && !cf.IsInvalid() && SymlinkTypeEqual(flags, cf.Flags) && BlocksEqual(cf.Blocks, blocks) {
+					atomic.AddInt64(nfiles, 1)
 					atomic.AddInt64(bytes, cf.Size())
 					return rval
 				}
@@ -287,6 +290,7 @@ func (w *Walker) walkAndHashFiles(fchan chan protocol.FileInfo, bytes *int64) fi
 				permUnchanged := w.IgnorePerms || !cf.HasPermissionBits() || PermsEqual(cf.Flags, uint32(info.Mode()))
 				if ok && permUnchanged && !cf.IsDeleted() && cf.Modified == info.ModTime().Unix() && !cf.IsDirectory() &&
 					!cf.IsSymlink() && !cf.IsInvalid() && cf.Size() == info.Size() {
+					atomic.AddInt64(nfiles, 1)
 					atomic.AddInt64(bytes, cf.Size())
 					return nil
 				}

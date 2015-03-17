@@ -84,65 +84,6 @@ type service interface {
 	BringToFront(string)
 }
 
-type FolderSize struct {
-	nfiles     *int64
-	deleted    *int64
-	globalSize *int64
-	haveSize   map[protocol.DeviceID]*int64
-	needSize   map[protocol.DeviceID]*int64
-}
-
-func NewFolderSize(FileSet *fs) *FolderSize {
-	nfiles := int64(0)
-	deleted := int64(0)
-	globalSize := int64(0)
-	for fi := range fs {
-		if fi.IsInvalid() {
-			return
-		}
-		if fi.IsDeleted() {
-			deleted += 1
-			return
-		}
-		nfiles += 1
-		globalSize += fi.Size()
-	}
-	return &FolderSize{
-		nfiles:     &nfiles,
-		deleted:    &deleted,
-		globalSize: &globalSize,
-		haveSize:   make(map[protocol.DeviceID]*int64),
-		needSize:   make(map[protocol.DeviceID]*int64),
-	}
-}
-
-func (m *Model) StoreHaveSize(folder string, device protocol.DeviceID, bytes int64) {
-	println("Set: ", bytes)
-	m.fmut.Lock()
-	defer m.fmut.Unlock()
-	sz, _ := m.folderSize[folder]
-	pBytes, ok := sz.haveSize[device]
-	if !ok {
-		sz.haveSize[device] = &bytes
-	} else {
-		atomic.StoreInt64(pBytes, bytes)
-	}
-}
-
-func (m *Model) AddHaveSize(folder string, device protocol.DeviceID, bytes int64) {
-	m.fmut.Lock()
-	defer m.fmut.Unlock()
-	sz, _ := m.folderSize[folder]
-	pBytes, ok := sz.haveSize[device]
-	if !ok {
-		sz.haveSize[device] = &bytes
-		println("Lode - Initial ", folder, bytes)
-	} else {
-		atomic.AddInt64(pBytes, bytes)
-		println("Lode - Increment: ", folder, bytes, " total: ", atomic.LoadInt64(pBytes))
-	}
-}
-
 type Model struct {
 	cfg             *config.Wrapper
 	db              *leveldb.DB
@@ -155,7 +96,6 @@ type Model struct {
 
 	folderCfgs     map[string]config.FolderConfiguration                  // folder -> cfg
 	folderFiles    map[string]*db.FileSet                                 // folder -> files
-	folderSize     map[string]*FolderSize                                 // folder -> total filesizes per device
 	folderDevices  map[string][]protocol.DeviceID                         // folder -> deviceIDs
 	deviceFolders  map[protocol.DeviceID][]string                         // deviceID -> folders
 	deviceStatRefs map[protocol.DeviceID]*stats.DeviceStatisticsReference // deviceID -> statsRef
@@ -196,7 +136,6 @@ func NewModel(cfg *config.Wrapper, deviceName, clientName, clientVersion string,
 		clientVersion:      clientVersion,
 		folderCfgs:         make(map[string]config.FolderConfiguration),
 		folderFiles:        make(map[string]*db.FileSet),
-		folderSize:         make(map[string]*FolderSize),
 		folderDevices:      make(map[string][]protocol.DeviceID),
 		deviceFolders:      make(map[protocol.DeviceID][]string),
 		deviceStatRefs:     make(map[protocol.DeviceID]*stats.DeviceStatisticsReference),
@@ -410,20 +349,15 @@ func sizeOf(fs []protocol.FileInfo) (files int64, deleted int64, bytes int64) {
 // Uses cached folder size unless this is not available yet (falls back to Completion()).
 func (m *Model) Completion(device protocol.DeviceID, folder string) float64 {
 	m.fmut.RLock()
-	fs, ok := m.folderSize[folder]
+	rf, ok := m.folderFiles[folder]
 	m.fmut.RUnlock()
 	if !ok {
-		// We don't have the folder size (yet), fall back to calculation
-		l.Debugf("%v Completion(%s, %q) folder size not ready", m, device, folder)
-		return m.CompletionCalc(device, folder)
+		return 0 // Folder doesn't exist, so we hardly have any of it
 	}
-	l.Debugf("%v Completion(%s, %q) folder size is ready", m, device, folder)
-	tot := int64(0)
-	for _, s := range fs.haveSize {
-		if tot < *s {
-			tot = *s
-		}
-	}
+
+	_, tot := rf.GetCachedGlobalSize()
+	haveNFiles, haveBytes := rf.GetCachedHaveSize(protocol.LocalDeviceID)
+	haveDeleted := int64(0)
 	//tot := atomic.LoadInt64(fs.globalSize)
 	//if tot == 0 {
 	//	return 100 // Folder is empty, so we have all of it
@@ -439,12 +373,9 @@ func (m *Model) Completion(device protocol.DeviceID, folder string) float64 {
 
 	var tot2 int64
 	var need2 int64
-	m.fmut.RLock()
-	rf, ok := m.folderFiles[folder]
-	m.fmut.RUnlock()
-	if !ok {
-		return 0 // Folder doesn't exist, so we hardly have any of it
-	}
+	haveNFiles2 := int64(0)
+	haveDeleted2 := int64(0)
+	haveBytes2 := int64(0)
 	rf.WithGlobalTruncated(func(f db.FileIntf) bool {
 		if !f.IsDeleted() {
 			tot2 += f.Size()
@@ -457,12 +388,24 @@ func (m *Model) Completion(device protocol.DeviceID, folder string) float64 {
 		}
 		return true
 	})
+	rf.WithHaveTruncated(protocol.LocalDeviceID, func(f db.FileIntf) bool {
+		if f.IsInvalid() {
+			return true
+		}
+		fs, de, by := sizeOfFile(f)
+		haveNFiles2 += fs
+		haveDeleted2 += de
+		haveBytes2 += by
+		return true
+	})
 
 	need := need2
 	res := 100 * (1 - float64(need)/float64(tot))
-	fmt.Printf("%v Lode - Completion(%s, %q): %f (%d / %d) -- (%d / %d)\n", m, device, folder, res, need, tot, need2, tot2)
+	res2 := 100 * (1 - float64(need2)/float64(tot2))
+	fmt.Printf("Lode - Completion(%s, %q): %f (%d / %d) -- %f (%d / %d)\n", device[1:6], folder, res, need, tot, res2, need2, tot2)
+	fmt.Printf("Lode - Have(%d %d %d) - HaveCalc(%d %d %d)\n", haveNFiles, haveDeleted, haveBytes, haveNFiles2, haveDeleted2, haveBytes2)
 	if debug {
-		l.Debugf("%v Completion(%s, %q): %f (%d / %d)", m, device, folder, res, need, tot)
+		l.Debugf("%v Completion(%s, %q): %f (%d / %d)", device, folder, res, need, tot)
 	}
 
 	return res
@@ -500,15 +443,13 @@ func (m *Model) GlobalSizeCalc(folder string) (nfiles int64, deleted int64, byte
 // Uses cached folder size unless this is not available yet.
 func (m *Model) GlobalSize(folder string) (nfiles int64, deleted int64, bytes int64) {
 	m.fmut.RLock()
-	fs, ok := m.folderSize[folder]
+	rf, ok := m.folderFiles[folder]
 	m.fmut.RUnlock()
 	if !ok {
-		return m.GlobalSizeCalc(folder)
+		return 0, 0, 0 // Folder doesn't exist, so we hardly have any of it
 	}
-	nfiles = atomic.LoadInt64(fs.nfiles)
-	deleted = atomic.LoadInt64(fs.deleted)
-	bytes = atomic.LoadInt64(fs.globalSize)
-	return
+	files, bytes := rf.GetCachedGlobalSize()
+	return files, 0, bytes
 }
 
 // LocalSizeCalc returns the number of files, deleted files and total bytes for all
@@ -536,21 +477,13 @@ func (m *Model) LocalSizeCalc(folder string) (nfiles int64, deleted int64, bytes
 // Uses cached folder size unless this is not available yet.
 func (m *Model) LocalSize(folder string) (nfiles int64, deleted int64, bytes int64) {
 	m.fmut.RLock()
-	fs, ok := m.folderSize[folder]
+	rf, ok := m.folderFiles[folder]
 	m.fmut.RUnlock()
 	if !ok {
-		return m.LocalSizeCalc(folder)
+		return 0, 0, 0 // Folder doesn't exist, so we hardly have any of it
 	}
-	m.fmut.RLock()
-	localSize, ok := fs.haveSize[protocol.LocalDeviceID]
-	m.fmut.RUnlock()
-	if !ok {
-		return m.LocalSizeCalc(folder)
-	}
-	nfiles = atomic.LoadInt64(fs.nfiles)
-	deleted = atomic.LoadInt64(fs.deleted)
-	bytes = atomic.LoadInt64(localSize)
-	return nfiles, deleted, bytes
+	files, bytes := rf.GetCachedHaveSize(protocol.LocalDeviceID)
+	return files, 0, bytes
 }
 
 // NeedSize returns the number and total size of currently needed files.
@@ -574,35 +507,19 @@ func (m *Model) NeedSizeCalc(folder string) (nfiles int64, bytes int64) {
 
 // NeedSize returns the number and total size of currently needed files.
 // Uses cached folder size unless this is not available yet.
-func (m *Model) NeedSize(folder string) (nfiles int64, bytes int64) {
-	device := protocol.LocalDeviceID
+func (m *Model) NeedSize(folder string) (int64, int64) {
 	m.fmut.RLock()
-	fs, ok := m.folderSize[folder]
+	rf, ok := m.folderFiles[folder]
 	m.fmut.RUnlock()
 	if !ok {
-		// Missing need count, fall back to calculation
-		l.Debugf("%v NeedSize(%s, %q) need size not ready", m, device, folder)
-		return m.NeedSizeCalc(folder)
+		return 0, 0 // Folder doesn't exist, so we hardly have any of it
 	}
-
-	m.fmut.RLock()
-	pNeed, ok := fs.needSize[device]
-	m.fmut.RUnlock()
-	if !ok {
-		// Missing need count, fall back to calculation
-		l.Debugf("%v NeedSize(%s, %q) need size not ready", m, device, folder)
-		return m.NeedSizeCalc(folder)
-	}
-
-	nfiles = atomic.LoadInt64(fs.nfiles)
-	deleted := atomic.LoadInt64(fs.nfiles)
-	need := atomic.LoadInt64(pNeed)
-	nfiles += deleted
-	bytes = need - m.progressEmitter.BytesCompleted(folder)
+	files, bytes := rf.GetCachedNeedSize(protocol.LocalDeviceID)
+	bytes -= m.progressEmitter.BytesCompleted(folder)
 	if debug {
-		l.Debugf("%v NeedSize(%q): %d %d", m, folder, nfiles, bytes)
+		l.Debugf("%v NeedSize(%q): %d %d", m, folder, files, bytes)
 	}
-	return
+	return files, bytes
 }
 
 // NeedFiles returns the list of currently needed files in progress, queued,
@@ -698,11 +615,6 @@ func (m *Model) Index(deviceID protocol.DeviceID, folder string, fs []protocol.F
 	}
 
 	files.Replace(deviceID, fs)
-	bytes := int64(0)
-	for _, f := range fs {
-		bytes += f.Size()
-	}
-	m.StoreHaveSize(folder, deviceID, bytes)
 
 	events.Default.Log(events.RemoteIndexUpdated, map[string]interface{}{
 		"device":  deviceID.String(),
@@ -751,8 +663,7 @@ func (m *Model) IndexUpdate(deviceID protocol.DeviceID, folder string, fs []prot
 		}
 	}
 
-	bytes := files.Update(deviceID, fs)
-	m.AddHaveSize(folder, deviceID, bytes)
+	files.Update(deviceID, fs)
 
 	events.Default.Log(events.RemoteIndexUpdated, map[string]interface{}{
 		"device":  deviceID.String(),
@@ -1262,13 +1173,6 @@ func (m *Model) updateLocal(folder string, f protocol.FileInfo) {
 	m.fmut.RLock()
 	m.folderFiles[folder].Update(protocol.LocalDeviceID, []protocol.FileInfo{f})
 	m.fmut.RUnlock()
-	if !f.IsInvalid() {
-		if f.IsDelete() {
-			m.AddHaveSize(folder, protocol.LocalDeviceID, -f.Size())
-		} else {
-			m.AddHaveSize(folder, protocol.LocalDeviceID, f.Size())
-		}
-	}
 	events.Default.Log(events.LocalIndexUpdated, map[string]interface{}{
 		"folder":   folder,
 		"name":     f.Name,
@@ -1305,7 +1209,6 @@ func (m *Model) AddFolder(cfg config.FolderConfiguration) {
 	m.fmut.Lock()
 	m.folderCfgs[cfg.ID] = cfg
 	m.folderFiles[cfg.ID] = db.NewFileSet(cfg.ID, m.db)
-	m.folderSize[cfg.ID] = NewFolderSize(m.folderFiles[cfg.ID])
 
 	m.folderDevices[cfg.ID] = make([]protocol.DeviceID, len(cfg.Devices))
 	for i, device := range cfg.Devices {
@@ -1398,19 +1301,15 @@ func (m *Model) ScanFolderSub(folder, sub string) error {
 	}
 
 	m.setState(folder, FolderScanning)
-	fchan, _, err := w.Walk() // LO
+	fchan, scanFiles, scanBytes, err := w.Walk() // LO
 
 	if err != nil {
 		return err
 	}
-	nfiles := int64(0) // Track of updated local number of files
-	bytes := int64(0)  // Track of updated local bytesize
 	batchSize := 100
 	batch := make([]protocol.FileInfo, 0, batchSize)
 	// Newly hashed files
 	for f := range fchan {
-		nfiles += 1 // TODO are folder file items?
-		bytes := f.Size()
 		events.Default.Log(events.LocalIndexUpdated, map[string]interface{}{
 			"folder":   folder,
 			"name":     f.Name,
@@ -1419,17 +1318,19 @@ func (m *Model) ScanFolderSub(folder, sub string) error {
 			"size":     f.Size(),
 		})
 		if len(batch) == batchSize {
-			fs.Update(protocol.LocalDeviceID, batch)
+			nfiles, bytes := fs.Update(protocol.LocalDeviceID, batch)
+			atomic.AddInt64(scanFiles, nfiles) // TODO are folders file items?
+			atomic.AddInt64(scanBytes, bytes)
 			batch = batch[:0]
 		}
 		batch = append(batch, f)
 	}
 	if len(batch) > 0 {
-		fs.Update(protocol.LocalDeviceID, batch)
+		nfiles, bytes := fs.Update(protocol.LocalDeviceID, batch)
+		atomic.AddInt64(scanFiles, nfiles) // TODO are folders file items?
+		atomic.AddInt64(scanBytes, bytes)
 	}
 	batch = batch[:0]
-	// LODE bytes := atomic.LoadInt64(pBytes)
-	// LODE m.AddHaveSize(folder, protocol.LocalDeviceID, bytes)
 	// TODO: We should limit the Have scanning to start at sub
 	seenPrefix := false
 	fs.WithHaveTruncated(protocol.LocalDeviceID, func(fi db.FileIntf) bool {
@@ -1448,7 +1349,9 @@ func (m *Model) ScanFolderSub(folder, sub string) error {
 			}
 
 			if len(batch) == batchSize {
-				fs.Update(protocol.LocalDeviceID, batch)
+				nfiles, bytes := fs.Update(protocol.LocalDeviceID, batch)
+				atomic.AddInt64(scanFiles, nfiles) // TODO are folders file items?
+				atomic.AddInt64(scanBytes, bytes)
 				batch = batch[:0]
 			}
 
@@ -1457,8 +1360,6 @@ func (m *Model) ScanFolderSub(folder, sub string) error {
 				if debug {
 					l.Debugln("setting invalid bit on ignored", f)
 				}
-				nfiles -= 1
-				bytes -= f.Size()
 				nf := protocol.FileInfo{
 					Name:     f.Name,
 					Flags:    f.Flags | protocol.FlagInvalid,
@@ -1483,8 +1384,6 @@ func (m *Model) ScanFolderSub(folder, sub string) error {
 				// file) are deleted but will return a confusing error ("not a
 				// directory") when we try to Lstat() them.
 
-				nfiles -= 1
-				bytes -= f.Size()
 				nf := protocol.FileInfo{
 					Name:     f.Name,
 					Flags:    f.Flags | protocol.FlagDeleted,
@@ -1504,10 +1403,11 @@ func (m *Model) ScanFolderSub(folder, sub string) error {
 		return true
 	})
 	if len(batch) > 0 {
-		fs.Update(protocol.LocalDeviceID, batch)
+		nfiles, bytes := fs.Update(protocol.LocalDeviceID, batch)
+		atomic.AddInt64(scanFiles, nfiles) // TODO are folders file items?
+		atomic.AddInt64(scanBytes, bytes)
 	}
 
-	m.AddHaveSize(folder, protocol.LocalDeviceID, nfiles, bytes)
 	m.setState(folder, FolderIdle)
 	return nil
 }
@@ -1580,6 +1480,7 @@ func (m *Model) State(folder string) (string, time.Time) {
 }
 
 func (m *Model) Override(folder string) {
+	nfiles := int64(0)
 	bytes := int64(0)
 	m.fmut.RLock()
 	fs := m.folderFiles[folder]
@@ -1590,7 +1491,9 @@ func (m *Model) Override(folder string) {
 	fs.WithNeed(protocol.LocalDeviceID, func(fi db.FileIntf) bool {
 		need := fi.(protocol.FileInfo)
 		if len(batch) == indexBatchSize {
-			bytes += fs.Update(protocol.LocalDeviceID, batch)
+			rNfiles, rBytes := fs.Update(protocol.LocalDeviceID, batch)
+			nfiles += rNfiles
+			bytes += rBytes
 			batch = batch[:0]
 		}
 
@@ -1609,9 +1512,10 @@ func (m *Model) Override(folder string) {
 		return true
 	})
 	if len(batch) > 0 {
-		bytes += fs.Update(protocol.LocalDeviceID, batch)
+		rNfiles, rBytes := fs.Update(protocol.LocalDeviceID, batch)
+		nfiles += rNfiles
+		bytes += rBytes
 	}
-	m.AddHaveSize(folder, protocol.LocalDeviceID, bytes)
 	m.setState(folder, FolderIdle)
 }
 
