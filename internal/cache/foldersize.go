@@ -25,8 +25,8 @@ import (
 
 type FolderSize struct {
 	folder      string
-	globalFiles *int64
-	globalSize  *int64
+	globalSize  map[protocol.DeviceID]*int64
+	globalCount map[protocol.DeviceID]*int64
 	haveSize    map[protocol.DeviceID]*int64
 	haveCount   map[protocol.DeviceID]*int64
 	needSize    map[protocol.DeviceID]*int64
@@ -35,26 +35,15 @@ type FolderSize struct {
 }
 
 func NewFolderSize(folder string) *FolderSize {
-	globalFiles := int64(0)
-	globalSize := int64(0)
 	fs := FolderSize{
 		folder:      folder,
-		globalFiles: &globalFiles,
-		globalSize:  &globalSize,
+		globalSize:  make(map[protocol.DeviceID]*int64),
+		globalCount: make(map[protocol.DeviceID]*int64),
 		haveSize:    make(map[protocol.DeviceID]*int64),
 		haveCount:   make(map[protocol.DeviceID]*int64),
 		needSize:    make(map[protocol.DeviceID]*int64), // TODO not a map?
 		needCount:   make(map[protocol.DeviceID]*int64), // TODO not a map?
 	}
-	hSize := int64(0)
-	hCount := int64(0)
-	nSize := int64(0)
-	nCount := int64(0)
-	// Initialise local device
-	fs.haveSize[protocol.LocalDeviceID] = &hSize
-	fs.haveCount[protocol.LocalDeviceID] = &hCount
-	fs.needSize[protocol.LocalDeviceID] = &nSize
-	fs.needCount[protocol.LocalDeviceID] = &nCount
 	return &fs
 }
 
@@ -62,30 +51,41 @@ func (fs *FolderSize) AddHave(device protocol.DeviceID, nfiles int64, bytes int6
 	fs.mut.Lock()
 	pFiles, ok := fs.haveCount[device]
 	pBytes, _ := fs.haveSize[device]
-	fs.mut.Unlock()
 	if !ok {
-		nfiles := int64(0)
-		bytes := int64(0)
 		fs.haveCount[device] = &nfiles
 		fs.haveSize[device] = &bytes
+		fs.mut.Unlock()
+		fmt.Println("Init cached have size", fs.folder, device.String()[1:7], nfiles, bytes)
 		return
 	}
+	fs.mut.Unlock()
 	atomic.AddInt64(pFiles, nfiles)
 	atomic.AddInt64(pBytes, bytes)
-	fmt.Println("Add cached have size", fs.folder, device, nfiles, bytes, " total: ", atomic.LoadInt64(pFiles), atomic.LoadInt64(pBytes))
+	fmt.Println("Add cached have size", fs.folder, device.String()[1:7], nfiles, bytes, " total: ", atomic.LoadInt64(pFiles), atomic.LoadInt64(pBytes))
 }
 
-func (fs *FolderSize) AddGlobal(nfiles int64, bytes int64) {
-	atomic.AddInt64(fs.globalFiles, nfiles)
-	atomic.AddInt64(fs.globalSize, bytes)
-	fmt.Println("Add cached global", fs.folder, nfiles, bytes, " total: ", atomic.LoadInt64(fs.globalFiles), atomic.LoadInt64(fs.globalSize))
+func (fs *FolderSize) AddGlobal(device protocol.DeviceID, nfiles int64, bytes int64) {
+	fs.mut.Lock()
+	pFiles, ok := fs.globalCount[device]
+	pBytes, _ := fs.globalSize[device]
+	if !ok {
+		fs.globalCount[device] = &nfiles
+		fs.globalSize[device] = &bytes
+		fs.mut.Unlock()
+		fmt.Println("Init cached global size", fs.folder, device.String()[1:7], nfiles, bytes)
+		return
+	}
+	fs.mut.Unlock()
+	atomic.AddInt64(pFiles, nfiles)
+	atomic.AddInt64(pBytes, bytes)
+	fmt.Println("Add cached global size", fs.folder, device.String()[1:7], nfiles, bytes, " total: ", atomic.LoadInt64(pFiles), atomic.LoadInt64(pBytes))
 }
 
 func (fs *FolderSize) GetHave(device protocol.DeviceID) (int64, int64) {
-	fs.mut.Lock()
+	fs.mut.RLock()
 	pFiles, ok := fs.haveCount[device]
 	pBytes, _ := fs.haveSize[device]
-	fs.mut.Unlock()
+	fs.mut.RUnlock()
 	if !ok {
 		panic("Cached size not initialised yet " + fs.folder)
 	}
@@ -93,5 +93,21 @@ func (fs *FolderSize) GetHave(device protocol.DeviceID) (int64, int64) {
 }
 
 func (fs *FolderSize) GetGlobal() (int64, int64) {
-	return atomic.LoadInt64(fs.globalFiles), atomic.LoadInt64(fs.globalSize)
+	nfiles := int64(0)
+	bytes := int64(0)
+	fs.mut.RLock()
+	for _, pF := range fs.globalCount {
+		f := atomic.LoadInt64(pF)
+		if f > nfiles {
+			nfiles = f
+		}
+	}
+	for _, pB := range fs.globalSize {
+		b := atomic.LoadInt64(pB)
+		if b > bytes {
+			bytes = b
+		}
+	}
+	fs.mut.RUnlock()
+	return nfiles, bytes
 }

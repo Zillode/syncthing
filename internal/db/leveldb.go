@@ -238,10 +238,11 @@ func ldbGenericReplace(db *leveldb.DB, folder, device []byte, c *cache.FolderSiz
 				maxLocalVer = lv
 			}
 			// Add to Cache
-			c.AddHave(protocol.DeviceIDFromBytes(device), 1, fs[fsi].Size())
+			deviceID := protocol.DeviceIDFromBytes(device)
+			c.AddHave(deviceID, 1, fs[fsi].Size())
 			if fs[fsi].IsInvalid() { // TODO when is a file invalid?
 				if ldbRemoveFromGlobal(snap, batch, folder, device, newName) {
-					c.AddGlobal(-1, -fs[fsi].Size())
+					c.AddGlobal(deviceID, -1, -fs[fsi].Size())
 				}
 			} else {
 				changed, add := ldbUpdateGlobal(snap, batch, folder, device, newName, fs[fsi].Version)
@@ -261,9 +262,9 @@ func ldbGenericReplace(db *leveldb.DB, folder, device []byte, c *cache.FolderSiz
 				}
 				if fs[fsi].IsDeleted() {
 					dFiles = -dFiles
-					dSize = dSize
+					dSize = -dSize
 				}
-				c.AddGlobal(dFiles, dSize)
+				c.AddGlobal(deviceID, dFiles, dSize)
 			}
 			fsi++
 
@@ -285,10 +286,11 @@ func ldbGenericReplace(db *leveldb.DB, folder, device []byte, c *cache.FolderSiz
 					maxLocalVer = lv
 				}
 				// Update the Cache
-				c.AddHave(protocol.DeviceIDFromBytes(device), 0, fs[fsi].Size()-ef.Size())
+				deviceID := protocol.DeviceIDFromBytes(device)
+				c.AddHave(deviceID, 0, fs[fsi].Size()-ef.Size())
 				if fs[fsi].IsInvalid() {
 					if ldbRemoveFromGlobal(snap, batch, folder, device, newName) {
-						c.AddGlobal(-1, -fs[fsi].Size())
+						c.AddGlobal(deviceID, -1, -fs[fsi].Size())
 					}
 				} else {
 					changed, add := ldbUpdateGlobal(snap, batch, folder, device, newName, fs[fsi].Version)
@@ -310,7 +312,7 @@ func ldbGenericReplace(db *leveldb.DB, folder, device []byte, c *cache.FolderSiz
 						dFiles = -dFiles
 						dSize = -dSize
 					}
-					c.AddGlobal(dFiles, dSize)
+					c.AddGlobal(deviceID, dFiles, dSize)
 				}
 			} else if debugDB {
 				l.Debugln("generic replace; equal - ignore")
@@ -366,9 +368,10 @@ func ldbReplace(db *leveldb.DB, folder []byte, device []byte, c *cache.FolderSiz
 		// Subtract old from Cache
 		var ef FileInfoTruncated
 		ef.UnmarshalXDR(dbi.Value())
-		c.AddHave(protocol.DeviceIDFromBytes(device), -1, -ef.Size())
+		deviceID := protocol.DeviceIDFromBytes(device)
+		c.AddHave(deviceID, -1, -ef.Size())
 		if ldbRemoveFromGlobal(db, batch, folder, device, name) {
-			c.AddGlobal(-1, -ef.Size())
+			c.AddGlobal(deviceID, -1, -ef.Size())
 		} else {
 			panic("should be gone! 1")
 		}
@@ -420,7 +423,7 @@ func ldbReplaceWithDelete(db *leveldb.DB, folder []byte, device []byte, c *cache
 				dFiles = -dFiles
 				dSize = -dSize
 			}
-			c.AddGlobal(dFiles, dSize)
+			c.AddGlobal(protocol.DeviceIDFromBytes(device), dFiles, dSize)
 
 			return ts
 		}
@@ -462,10 +465,11 @@ func ldbUpdate(db *leveldb.DB, folder, device []byte, c *cache.FolderSize, fs []
 				maxLocalVer = lv
 			}
 			// Add to Cache
-			c.AddHave(protocol.DeviceIDFromBytes(device), 1, f.Size())
+			deviceID := protocol.DeviceIDFromBytes(device)
+			c.AddHave(deviceID, 1, f.Size())
 			if f.IsInvalid() {
 				if ldbRemoveFromGlobal(snap, batch, folder, device, name) {
-					c.AddGlobal(-1, -f.Size())
+					c.AddGlobal(deviceID, -1, -f.Size())
 				}
 			} else {
 				changed, add := ldbUpdateGlobal(snap, batch, folder, device, name, f.Version)
@@ -487,7 +491,7 @@ func ldbUpdate(db *leveldb.DB, folder, device []byte, c *cache.FolderSize, fs []
 					dFiles = -dFiles
 					dSize = -dSize
 				}
-				c.AddGlobal(dFiles, dSize)
+				c.AddGlobal(deviceID, dFiles, dSize)
 			}
 			continue
 		}
@@ -504,10 +508,11 @@ func ldbUpdate(db *leveldb.DB, folder, device []byte, c *cache.FolderSize, fs []
 				maxLocalVer = lv
 			}
 			// Update the Cache
-			c.AddHave(protocol.DeviceIDFromBytes(device), 0, f.Size()-ef.Size())
+			deviceID := protocol.DeviceIDFromBytes(device)
+			c.AddHave(deviceID, 0, f.Size()-ef.Size())
 			if f.IsInvalid() {
 				if ldbRemoveFromGlobal(snap, batch, folder, device, name) {
-					c.AddGlobal(-1, -f.Size())
+					c.AddGlobal(deviceID, -1, -f.Size())
 				}
 			} else {
 				changed, add := ldbUpdateGlobal(snap, batch, folder, device, name, f.Version)
@@ -527,7 +532,7 @@ func ldbUpdate(db *leveldb.DB, folder, device []byte, c *cache.FolderSize, fs []
 					dFiles = -dFiles
 					dSize = -dSize
 				}
-				c.AddGlobal(dFiles, dSize)
+				c.AddGlobal(deviceID, dFiles, dSize)
 			}
 		}
 
