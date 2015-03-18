@@ -402,7 +402,7 @@ func (m *Model) Completion(device protocol.DeviceID, folder string) float64 {
 	need := need2
 	res := 100 * (1 - float64(need)/float64(tot))
 	res2 := 100 * (1 - float64(need2)/float64(tot2))
-	fmt.Printf("Lode - Completion(%s, %q): %f (%d / %d) -- %f (%d / %d)\n", device[1:6], folder, res, need, tot, res2, need2, tot2)
+	fmt.Printf("Lode - Completion(%s, %q): %f (%d / %d) -- %f (%d / %d)\n", device.String()[1:7], folder, res, need, tot, res2, need2, tot2)
 	fmt.Printf("Lode - Have(%d %d %d) - HaveCalc(%d %d %d)\n", haveNFiles, haveDeleted, haveBytes, haveNFiles2, haveDeleted2, haveBytes2)
 	if debug {
 		l.Debugf("%v Completion(%s, %q): %f (%d / %d)", device, folder, res, need, tot)

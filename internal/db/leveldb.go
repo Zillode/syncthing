@@ -573,7 +573,6 @@ func ldbInsert(batch dbWriter, folder, device []byte, c *cache.FolderSize, file 
 		l.Debugf("batch.Put %p %x", batch, nk)
 	}
 	batch.Put(nk, file.MustMarshalXDR())
-	c.AddHave(protocol.DeviceIDFromBytes(device), 1, file.Size())
 
 	return file.LocalVersion
 }
@@ -635,7 +634,7 @@ done:
 	}
 	batch.Put(gk, fl.MustMarshalXDR())
 
-	return true, svl != nil
+	return true, svl == nil
 }
 
 // ldbRemoveFromGlobal removes the device from the global version list for the

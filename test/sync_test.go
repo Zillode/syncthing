@@ -66,7 +66,188 @@ func TestSyncClusterStaggeredVersioning(t *testing.T) {
 	cfg.SetFolder(fld)
 	cfg.Save()
 
-	testSyncCluster(t)
+	testSyncClusterSimple(t)
+}
+
+func testSyncClusterSimple(t *testing.T) {
+	/*
+
+		This tests syncing files back and forth between three cluster members.
+		Their configs are in h1, h2 and h3. The folder "default" is shared
+		between all and stored in s1, s2 and s3 respectively.
+
+		Another folder is shared between 1 and 2 only, in s12-1 and s12-2. A
+		third folders is shared between 2 and 3, in s23-2 and s23-3.
+
+	*/
+	log.Println("Cleaning...")
+	err := removeAll("s1", "s12-1",
+		"s2", "s12-2", "s23-2",
+		"s3", "s23-3",
+		"h1/index", "h2/index", "h3/index")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create initial folder contents. All three devices have stuff in
+	// "default", which should be merged. The other two folders are initially
+	// empty on one side.
+
+	log.Println("Generating files...")
+
+	err = generateFiles("s1", 1000, 21, "../LICENSE")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = generateFiles("s12-1", 1000, 21, "../LICENSE")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// We'll use this file for appending data without modifying the time stamp.
+	fd, err := os.Create("s1/test-appendfile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = fd.WriteString("hello\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = fd.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = generateFiles("s2", 1000, 21, "../LICENSE")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = generateFiles("s23-2", 1000, 21, "../LICENSE")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = generateFiles("s3", 1000, 21, "../LICENSE")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Prepare the expected state of folders after the sync
+	c1, err := directoryContents("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c2, err := directoryContents("s2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c3, err := directoryContents("s3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e1 := mergeDirectoryContents(c1, c2, c3)
+	e2, err := directoryContents("s12-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e3, err := directoryContents("s23-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := [][]fileInfo{e1, e2, e3}
+
+	// Start the syncers
+	p, err := scStartProcesses()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		for i := range p {
+			p[i].stop()
+		}
+	}()
+
+	for count := 0; count < 5; count++ {
+		log.Println("Forcing rescan...")
+
+		// Force rescan of folders
+		for i := range p {
+			p[i].post("/rest/scan?folder=default", nil)
+			if i < 3 {
+				p[i].post("/rest/scan?folder=s12", nil)
+			}
+			if i > 1 {
+				p[i].post("/rest/scan?folder=s23", nil)
+			}
+		}
+
+		// Sync stuff and verify it looks right
+		err = scSyncAndCompare(p, expected)
+		if err != nil {
+			t.Error(err)
+			break
+		}
+
+		log.Println("Altering...")
+
+		// Alter the source files for another round
+		err = alterFiles("s1")
+		if err != nil {
+			t.Error(err)
+			break
+		}
+		err = alterFiles("s12-1")
+		if err != nil {
+			t.Error(err)
+			break
+		}
+		err = alterFiles("s23-2")
+		if err != nil {
+			t.Error(err)
+			break
+		}
+
+		// Alter the "test-appendfile" without changing it's modification time. Sneaky!
+		fi, err := os.Stat("s1/test-appendfile")
+		if err != nil {
+			t.Fatal(err)
+		}
+		fd, err := os.OpenFile("s1/test-appendfile", os.O_APPEND|os.O_WRONLY, 0644)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = fd.Seek(0, os.SEEK_END)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = fd.WriteString("more data\n")
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = fd.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = os.Chtimes("s1/test-appendfile", fi.ModTime(), fi.ModTime())
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Prepare the expected state of folders after the sync
+		e1, err = directoryContents("s1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		e2, err = directoryContents("s12-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		e3, err = directoryContents("s23-2")
+		if err != nil {
+			t.Fatal(err)
+		}
+		expected = [][]fileInfo{e1, e2, e3}
+	}
 }
 
 func testSyncCluster(t *testing.T) {
