@@ -18,6 +18,7 @@ s4d
 http
 h*/index*
 *.syncthing-reset*
+*.db
 panic-*.log
 audit-*.log
 h*/config.xml.v*

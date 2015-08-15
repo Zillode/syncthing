@@ -457,7 +457,13 @@ func (p *rwFolder) pullerIteration(ignores *ignore.Matcher) int {
 	dirDeletions := []protocol.FileInfo{}
 	buckets := map[string][]protocol.FileInfo{}
 
+	var files []db.FileIntf
 	folderFiles.WithNeed(protocol.LocalDeviceID, func(intf db.FileIntf) bool {
+		files = append(files, intf)
+		return true
+	})
+
+	for _, intf := range files {
 		// Needed items are delivered sorted lexicographically. We'll handle
 		// directories as they come along, so parents before children. Files
 		// are queued and the order may be changed later.
@@ -466,7 +472,7 @@ func (p *rwFolder) pullerIteration(ignores *ignore.Matcher) int {
 
 		if ignores.Match(file.Name) {
 			// This is an ignored file. Skip it, continue iteration.
-			return true
+			continue
 		}
 
 		if debug {
@@ -480,16 +486,6 @@ func (p *rwFolder) pullerIteration(ignores *ignore.Matcher) int {
 				dirDeletions = append(dirDeletions, file)
 			} else {
 				fileDeletions[file.Name] = file
-				df, ok := p.model.CurrentFolderFile(p.folder, file.Name)
-				// Local file can be already deleted, but with a lower version
-				// number, hence the deletion coming in again as part of
-				// WithNeed, furthermore, the file can simply be of the wrong
-				// type if we haven't yet managed to pull it.
-				if ok && !df.IsDeleted() && !df.IsSymlink() && !df.IsDirectory() {
-					// Put files into buckets per first hash
-					key := string(df.Blocks[0].Hash)
-					buckets[key] = append(buckets[key], df)
-				}
 			}
 		case file.IsDirectory() && !file.IsSymlink():
 			// A new or changed directory
@@ -505,8 +501,19 @@ func (p *rwFolder) pullerIteration(ignores *ignore.Matcher) int {
 		}
 
 		changed++
-		return true
-	})
+	}
+
+	for _, file := range fileDeletions {
+		if df, ok := p.model.CurrentFolderFile(p.folder, file.Name); ok && !df.IsDeleted() {
+			// Local file can be already deleted, but with a lower version
+			// number, hence the deletion coming in again as part of
+			// WithNeed
+
+			// Put files into buckets per first hash
+			key := string(df.Blocks[0].Hash)
+			buckets[key] = append(buckets[key], df)
+		}
+	}
 
 	// Check if we are able to store all files on disk
 	if pullFileSize > 0 {

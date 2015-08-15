@@ -33,7 +33,6 @@ import (
 	"github.com/syncthing/syncthing/lib/symlinks"
 	"github.com/syncthing/syncthing/lib/sync"
 	"github.com/syncthing/syncthing/lib/versioner"
-	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/thejerf/suture"
 )
 
@@ -65,8 +64,10 @@ type service interface {
 type Model struct {
 	*suture.Supervisor
 
-	cfg               *config.Wrapper
-	db                *leveldb.DB
+	cfg    *config.Wrapper
+	mainDB *db.MainDB
+	fileDB *db.SQLiteDB
+
 	finder            *db.BlockFinder
 	progressEmitter   *ProgressEmitter
 	id                protocol.DeviceID
@@ -103,7 +104,7 @@ var (
 // NewModel creates and starts a new model. The model starts in read-only mode,
 // where it sends index information to connected peers and responds to requests
 // for file data without altering the local folder in any way.
-func NewModel(cfg *config.Wrapper, id protocol.DeviceID, deviceName, clientName, clientVersion string, ldb *leveldb.DB) *Model {
+func NewModel(cfg *config.Wrapper, id protocol.DeviceID, deviceName, clientName, clientVersion string, mainDB *db.MainDB) *Model {
 	m := &Model{
 		Supervisor: suture.New("model", suture.Spec{
 			Log: func(line string) {
@@ -112,9 +113,9 @@ func NewModel(cfg *config.Wrapper, id protocol.DeviceID, deviceName, clientName,
 				}
 			},
 		}),
-		cfg:                cfg,
-		db:                 ldb,
-		finder:             db.NewBlockFinder(ldb, cfg),
+		cfg:    cfg,
+		mainDB: mainDB,
+		//finder:             db.NewBlockFinder(fileDB, cfg),
 		progressEmitter:    NewProgressEmitter(cfg),
 		id:                 id,
 		shortID:            id.Short(),
@@ -979,7 +980,7 @@ func (m *Model) folderStatRef(folder string) *stats.FolderStatisticsReference {
 
 	sr, ok := m.folderStatRefs[folder]
 	if !ok {
-		sr = stats.NewFolderStatisticsReference(m.db, folder)
+		sr = stats.NewFolderStatisticsReference(m.fileDB, folder)
 		m.folderStatRefs[folder] = sr
 	}
 	return sr
@@ -999,6 +1000,9 @@ func sendIndexes(conn protocol.Connection, folder string, fs *db.FileSet, ignore
 	}
 
 	minLocalVer, err := sendIndexTo(true, 0, conn, folder, fs, ignores)
+	if debug {
+		l.Debugf("sendIndexes for %s-%s/%q new local ver: %d", deviceID, name, folder, minLocalVer)
+	}
 
 	sub := events.Default.Subscribe(events.LocalIndexUpdated)
 	defer events.Default.Unsubscribe(sub)
@@ -1132,10 +1136,14 @@ func (m *Model) AddFolder(cfg config.FolderConfiguration) {
 	if len(cfg.ID) == 0 {
 		panic("cannot add empty folder id")
 	}
+	fdb, err := m.mainDB.NewSQLiteDB(cfg.ID + ".db")
+	if err != nil {
+		panic(err)
+	}
 
 	m.fmut.Lock()
 	m.folderCfgs[cfg.ID] = cfg
-	m.folderFiles[cfg.ID] = db.NewFileSet(cfg.ID, m.db)
+	m.folderFiles[cfg.ID] = db.NewFileSet(cfg.ID, fdb)
 
 	m.folderDevices[cfg.ID] = make([]protocol.DeviceID, len(cfg.Devices))
 	for i, device := range cfg.Devices {
@@ -1268,7 +1276,7 @@ nextSub:
 		TempNamer:     defTempNamer,
 		TempLifetime:  time.Duration(m.cfg.Options().KeepTemporariesH) * time.Hour,
 		CurrentFiler:  cFiler{m, folder},
-		MtimeRepo:     db.NewVirtualMtimeRepo(m.db, folderCfg.ID),
+		MtimeRepo:     db.NewVirtualMtimeRepo(m.mainDB, folderCfg.ID),
 		IgnorePerms:   folderCfg.IgnorePerms,
 		AutoNormalize: folderCfg.AutoNormalize,
 		Hashers:       m.numHashers(folder),

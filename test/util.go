@@ -272,15 +272,12 @@ func (i *inifiteReader) Read(bs []byte) (int, error) {
 }
 
 // rm -rf
-func removeAll(dirs ...string) error {
-	for _, dir := range dirs {
-		files, err := osutil.Glob(dir)
-		if err != nil {
-			return err
-		}
-		for _, file := range files {
+func removeAll(globs ...string) error {
+	for _, glob := range globs {
+		matches, _ := filepath.Glob(glob)
+		for _, match := range matches {
 			// Set any non-writeable files and dirs to writeable. This is necessary for os.RemoveAll to work on Windows.
-			filepath.Walk(file, func(path string, info os.FileInfo, err error) error {
+			filepath.Walk(match, func(path string, info os.FileInfo, err error) error {
 				if err != nil {
 					return err
 				}
@@ -289,7 +286,7 @@ func removeAll(dirs ...string) error {
 				}
 				return nil
 			})
-			os.RemoveAll(file)
+			os.RemoveAll(match)
 		}
 	}
 	return nil
