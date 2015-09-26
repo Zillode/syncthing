@@ -33,13 +33,13 @@ type testfile struct {
 type testfileList []testfile
 
 var testdata = testfileList{
-	{"afile", 4, "b5bb9d8014a0f9b1d61e21e796d78dccdf1352f23cd32812f4850b878ae4944c"},
+	{"afile", 4, "09c9459ff654468b6ab583df52a80db3"},
 	{"dir1", 128, ""},
-	{filepath.Join("dir1", "dfile"), 5, "49ae93732fcf8d63fe1cce759664982dbd5b23161f007dba8561862adc96d063"},
+	{filepath.Join("dir1", "dfile"), 5, "3233892ea89b83e9e2fc964b1f250648"},
 	{"dir2", 128, ""},
-	{filepath.Join("dir2", "cfile"), 4, "bf07a7fbb825fc0aae7bf4a1177b2b31fcf8a3feeaf7092761e18c859ee52a9c"},
-	{"excludes", 37, "df90b52f0c55dba7a7a940affe482571563b1ac57bd5be4d8a0291e7de928e06"},
-	{"further-excludes", 5, "7eb0a548094fa6295f7fd9200d69973e5f5ec5c04f2a86d998080ac43ecf89f1"},
+	{filepath.Join("dir2", "cfile"), 4, "5525b827c9b706ca64887348c9839a5f"},
+	{"excludes", 37, "efe6170cf410eca20f235507fa17ef5d"},
+	{"further-excludes", 5, "0881a3adc4c2fc73da6162102868b089"},
 }
 
 var correctIgnores = map[string][]string{

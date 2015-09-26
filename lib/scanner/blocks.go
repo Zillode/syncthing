@@ -8,15 +8,15 @@ package scanner
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"fmt"
 	"io"
 	"sync/atomic"
 
+	"github.com/spaolacci/murmur3"
 	"github.com/syncthing/syncthing/lib/protocol"
 )
 
-var SHA256OfNothing = []uint8{0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14, 0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f, 0xb9, 0x24, 0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c, 0xa4, 0x95, 0x99, 0x1b, 0x78, 0x52, 0xb8, 0x55}
+var Murmur128OfNothing = []uint8{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
 
 // Blocks returns the blockwise hash of the reader.
 func Blocks(r io.Reader, blocksize int, sizehint int64, counter *int64) ([]protocol.BlockInfo, error) {
@@ -25,7 +25,7 @@ func Blocks(r io.Reader, blocksize int, sizehint int64, counter *int64) ([]proto
 		blocks = make([]protocol.BlockInfo, 0, int(sizehint/int64(blocksize)))
 	}
 	var offset int64
-	hf := sha256.New()
+	hf := murmur3.New128()
 	for {
 		lr := &io.LimitedReader{R: r, N: int64(blocksize)}
 		n, err := io.Copy(hf, lr)
@@ -57,7 +57,7 @@ func Blocks(r io.Reader, blocksize int, sizehint int64, counter *int64) ([]proto
 		blocks = append(blocks, protocol.BlockInfo{
 			Offset: 0,
 			Size:   0,
-			Hash:   SHA256OfNothing,
+			Hash:   Murmur128OfNothing,
 		})
 	}
 
@@ -100,7 +100,7 @@ func BlockDiff(src, tgt []protocol.BlockInfo) (have, need []protocol.BlockInfo) 
 // Verify returns nil or an error describing the mismatch between the block
 // list and actual reader contents
 func Verify(r io.Reader, blocksize int, blocks []protocol.BlockInfo) error {
-	hf := sha256.New()
+	hf := murmur3.New128()
 	for i, block := range blocks {
 		lr := &io.LimitedReader{R: r, N: int64(blocksize)}
 		_, err := io.Copy(hf, lr)
@@ -130,7 +130,7 @@ func VerifyBuffer(buf []byte, block protocol.BlockInfo) ([]byte, error) {
 	if len(buf) != int(block.Size) {
 		return nil, fmt.Errorf("length mismatch %d != %d", len(buf), block.Size)
 	}
-	hf := sha256.New()
+	hf := murmur3.New128()
 	_, err := hf.Write(buf)
 	if err != nil {
 		return nil, err
